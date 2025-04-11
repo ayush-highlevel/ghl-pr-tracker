@@ -11,8 +11,8 @@ const DEFAULT_ORGANIZATION = 'GoHighLevel';
 const DEFAULT_TEAM_MEMBERS = ['ajayreddy611', 'ayush-highlevel', 'nihalmaddela12', 'hammad-ghl'];
 const DEFAULT_REPOS = ['leadgen-marketplace-backend', 'ghl-content-ai', 'spm-ts', 'platform-backend'];
 
-// Personal access token for API calls
-const GITHUB_TOKEN = process.env.REACT_APP_PR_TRACKER_GITHUB_TOKEN;
+// Optional Personal Access Token for API calls (if organization has OAuth restrictions)
+const GITHUB_TOKEN = process.env.REACT_APP_PR_TRACKER_GITHUB_TOKEN || '';
 
 // Firebase configuration
 const firebaseConfig = {
@@ -244,7 +244,10 @@ function App() {
           throw new Error('Failed to get credentials from GitHub');
         }
         
+        // Store GitHub access token for API calls
         const token = credential.accessToken;
+        localStorage.setItem('github_access_token', token);
+        
         const username = result.user.reloadUserInfo.screenName || result.user.displayName;
         
         if (!username) {
@@ -259,7 +262,8 @@ function App() {
           displayName: result.user.displayName,
           login: username,
           email: result.user.email,
-          photoURL: result.user.photoURL
+          photoURL: result.user.photoURL,
+          githubToken: token  // Store token in user data
         });
         
         const hasOrgAccess = await checkOrgMembership(token, username);
@@ -296,6 +300,7 @@ function App() {
   const handleLogout = async () => {
     try {
       await signOut(auth);
+      localStorage.removeItem('github_access_token'); // Clear the token
       setIsLoggedIn(false);
       setUserData(null);
       setPullRequests([]);
@@ -347,8 +352,8 @@ function App() {
   // Update the PR description with the Slack link
   const updatePRDescription = async (pr, slackLink) => {
     try {
-      if (!GITHUB_TOKEN || !isLoggedIn) {
-        setError('GitHub token not available or user not logged in');
+      if (!isLoggedIn) {
+        setError('User not logged in');
         return;
       }
       
@@ -359,7 +364,19 @@ function App() {
         [prKey]: true
       }));
       
-      const octokit = new Octokit({ auth: GITHUB_TOKEN });
+      // Try to use PAT first (for organizations with OAuth restrictions)
+      let token = GITHUB_TOKEN;
+      
+      // If no PAT, fall back to OAuth token
+      if (!token) {
+        token = userData?.githubToken || localStorage.getItem('github_access_token');
+      }
+      
+      if (!token) {
+        throw new Error('GitHub token not available. Please sign in again or configure a personal access token.');
+      }
+      
+      const octokit = new Octokit({ auth: token });
       
       // Get current PR details to make sure we have the latest body
       const { data: currentPR } = await octokit.pulls.get({
@@ -513,13 +530,21 @@ function App() {
     setError('');
     
     try {
-      if (!GITHUB_TOKEN) {
+      // Try to use PAT first (for organizations with OAuth restrictions)
+      let token = GITHUB_TOKEN;
+      
+      // If no PAT, fall back to OAuth token
+      if (!token) {
+        token = userData?.githubToken || localStorage.getItem('github_access_token');
+      }
+      
+      if (!token) {
         setRepositories(DEFAULT_REPOS);
         setRepoLoading(false);
         return;
       }
       
-      const octokit = new Octokit({ auth: GITHUB_TOKEN });
+      const octokit = new Octokit({ auth: token });
       
       try {
         const response = await octokit.repos.listForOrg({
@@ -571,7 +596,19 @@ function App() {
     setLoadingProgress({ total: selectedRepos.length * 2, completed: 0, stage: 'Fetching pull requests' });
     
     try {
-      const octokit = new Octokit({ auth: GITHUB_TOKEN });
+      // Try to use PAT first (for organizations with OAuth restrictions)
+      let token = GITHUB_TOKEN;
+      
+      // If no PAT, fall back to OAuth token
+      if (!token) {
+        token = userData?.githubToken || localStorage.getItem('github_access_token');
+      }
+      
+      if (!token) {
+        throw new Error('GitHub token not available. Please sign in again or configure a personal access token.');
+      }
+      
+      const octokit = new Octokit({ auth: token });
       
       // Step 1: Fetch all PRs from all repos in parallel
       const prFetchPromises = selectedRepos.map((repo, index) => 
