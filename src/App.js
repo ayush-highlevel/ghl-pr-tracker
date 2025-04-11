@@ -352,8 +352,8 @@ function App() {
   // Update the PR description with the Slack link
   const updatePRDescription = async (pr, slackLink) => {
     try {
-      if (!isLoggedIn) {
-        setError('User not logged in');
+      if (!isLoggedIn && !GITHUB_TOKEN) {
+        setError('User not logged in and no GitHub token available');
         return;
       }
       
@@ -368,7 +368,7 @@ function App() {
       let token = GITHUB_TOKEN;
       
       // If no PAT, fall back to OAuth token
-      if (!token) {
+      if (!token && isLoggedIn) {
         token = userData?.githubToken || localStorage.getItem('github_access_token');
       }
       
@@ -524,7 +524,7 @@ function App() {
   
   // Function to fetch repositories with pagination
   const fetchRepositories = async (pageNum) => {
-    if (!isLoggedIn) return;
+    if (!isLoggedIn && !GITHUB_TOKEN) return;
     
     setRepoLoading(true);
     setError('');
@@ -534,7 +534,7 @@ function App() {
       let token = GITHUB_TOKEN;
       
       // If no PAT, fall back to OAuth token
-      if (!token) {
+      if (!token && isLoggedIn) {
         token = userData?.githubToken || localStorage.getItem('github_access_token');
       }
       
@@ -585,7 +585,7 @@ function App() {
 
   // Function to fetch PRs with filtering - optimized with parallel requests only
   const fetchPullRequests = async () => {
-    if (!isLoggedIn || selectedRepos.length === 0) {
+    if ((!isLoggedIn && !GITHUB_TOKEN) || selectedRepos.length === 0) {
       setError('Please log in and select at least one repository.');
       return;
     }
@@ -600,7 +600,7 @@ function App() {
       let token = GITHUB_TOKEN;
       
       // If no PAT, fall back to OAuth token
-      if (!token) {
+      if (!token && isLoggedIn) {
         token = userData?.githubToken || localStorage.getItem('github_access_token');
       }
       

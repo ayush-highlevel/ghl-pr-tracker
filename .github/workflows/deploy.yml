@@ -23,7 +23,7 @@ jobs:
       - name: Install Dependencies
         run: npm ci
       
-      - name: Create .env file with public variables only
+      - name: Create .env file
         run: |
           echo "REACT_APP_FIREBASE_API_KEY=${{ secrets.REACT_APP_FIREBASE_API_KEY }}" > .env
           echo "REACT_APP_FIREBASE_AUTH_DOMAIN=${{ secrets.REACT_APP_FIREBASE_AUTH_DOMAIN }}" >> .env
@@ -31,8 +31,7 @@ jobs:
           echo "REACT_APP_FIREBASE_STORAGE_BUCKET=${{ secrets.REACT_APP_FIREBASE_STORAGE_BUCKET }}" >> .env
           echo "REACT_APP_FIREBASE_MESSAGING_SENDER_ID=${{ secrets.REACT_APP_FIREBASE_MESSAGING_SENDER_ID }}" >> .env
           echo "REACT_APP_FIREBASE_APP_ID=${{ secrets.REACT_APP_FIREBASE_APP_ID }}" >> .env
-          # Add GitHub token as a proxy server URL - this prevents the token from being directly in the client code
-          echo "REACT_APP_PR_TRACKER_GITHUB_TOKEN=''" >> .env
+          echo "REACT_APP_PR_TRACKER_GITHUB_TOKEN=${{ secrets.REACT_APP_PR_TRACKER_GITHUB_TOKEN }}" >> .env
 
       - name: Build
         run: npm run build
