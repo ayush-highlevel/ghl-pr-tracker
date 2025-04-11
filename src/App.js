@@ -1,25 +1,71 @@
-// App.js
-import React, { useState, useEffect } from 'react';
+// App.js - Improved organization
+import React, { useState, useEffect, useRef, useCallback, memo } from 'react';
 import './App.css';
 import { Octokit } from '@octokit/rest';
+// Import Firebase modules
+import { initializeApp } from 'firebase/app';
+import { getAuth, GithubAuthProvider, signInWithPopup, onAuthStateChanged, signOut } from 'firebase/auth';
 
 // Preset values
 const DEFAULT_ORGANIZATION = 'GoHighLevel';
 const DEFAULT_TEAM_MEMBERS = ['ajayreddy611', 'ayush-highlevel', 'nihalmaddela12', 'hammad-ghl'];
 const DEFAULT_REPOS = ['leadgen-marketplace-backend', 'ghl-content-ai', 'spm-ts', 'platform-backend'];
 
+// Personal access token for API calls
+const GITHUB_TOKEN = process.env.REACT_APP_PR_TRACKER_GITHUB_TOKEN;
+
+// Firebase configuration
+const firebaseConfig = {
+  apiKey: process.env.REACT_APP_FIREBASE_API_KEY,
+  authDomain: process.env.REACT_APP_FIREBASE_AUTH_DOMAIN,
+  projectId: process.env.REACT_APP_FIREBASE_PROJECT_ID,
+  storageBucket: process.env.REACT_APP_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: process.env.REACT_APP_FIREBASE_MESSAGING_SENDER_ID,
+  appId: process.env.REACT_APP_FIREBASE_APP_ID
+};
+
+// Initialize Firebase with CSP compliance
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const githubProvider = new GithubAuthProvider();
+githubProvider.addScope('repo');
+githubProvider.addScope('read:org');
+githubProvider.addScope('user:email');
+githubProvider.addScope('org:read');
+
+// Add state parameter to prevent CSRF attacks
+githubProvider.setCustomParameters({
+  'state': generateRandomState()
+});
+
+// Generate random state for CSRF protection
+function generateRandomState() {
+  return Math.random().toString(36).substring(2, 15) + 
+         Math.random().toString(36).substring(2, 15);
+}
+
+// Regex to extract Slack links from PR descriptions - with stricter validation
+const SLACK_LINK_REGEX = /^(https:\/\/[a-zA-Z0-9-]+\.slack\.com\/[a-zA-Z0-9\/#@_\-=&.:]+)$/;
+
+// Sanitize text to prevent XSS attacks
+function sanitizeText(text) {
+  if (!text) return '';
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
 function App() {
-  const envGithubToken = process.env.PR_TRACKER_GITHUB_TOKEN || '';
-  const [githubToken, setGithubToken] = useState(localStorage.getItem('github_token') || envGithubToken);
-  const [slackToken, setSlackToken] = useState(localStorage.getItem('slack_token') || '');
-  const [slackChannel, setSlackChannel] = useState(localStorage.getItem('slack_channel') || '');
+  // State declarations
   const [organization] = useState(DEFAULT_ORGANIZATION);
   const [teamMembers, setTeamMembers] = useState(
     JSON.parse(localStorage.getItem('team_members') || JSON.stringify(DEFAULT_TEAM_MEMBERS))
   );
   const [pullRequests, setPullRequests] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [slackLoading, setSlackLoading] = useState(false);
   const [repoLoading, setRepoLoading] = useState(false);
   const [newTeamMember, setNewTeamMember] = useState('');
   const [repositories, setRepositories] = useState([]);
@@ -27,70 +73,482 @@ function App() {
     JSON.parse(localStorage.getItem('selected_repos') || JSON.stringify(DEFAULT_REPOS))
   );
   const [error, setError] = useState('');
-  const [slackError, setSlackError] = useState('');
-  const [showInitialSetup, setShowInitialSetup] = useState(!localStorage.getItem('github_token') && !envGithubToken);
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [page, setPage] = useState(1);
   const [hasNextPage, setHasNextPage] = useState(false);
-  const [statusFilter, setStatusFilter] = useState('all');
   const [authorFilter, setAuthorFilter] = useState('all');
   const [reviewerFilter, setReviewerFilter] = useState('all');
   const [repoFilter, setRepoFilter] = useState('all');
   const [settingsExpanded, setSettingsExpanded] = useState(true);
   const [activeSettingsTab, setActiveSettingsTab] = useState('general');
-
+  const [userData, setUserData] = useState(null);
+  const slackLinkInputRef = useRef(null);
+  const [loadingProgress, setLoadingProgress] = useState({ total: 0, completed: 0, stage: '' });
+  
+  // Modal state for slack link editing
+  const [slackLinkModal, setSlackLinkModal] = useState({
+    isOpen: false,
+    prId: null,
+    currentLink: ''
+  });
+  
+  // Use a ref to hold the current input value without causing rerenders
+  const modalInputRef = useRef('');
+  
+  // Store scroll position when opening modal
+  const scrollPositionRef = useRef(0);
+  
+  // Custom storage for added slack links
+  const [customSlackLinks, setCustomSlackLinks] = useState(
+    JSON.parse(localStorage.getItem('custom_slack_links') || '{}')
+  );
+  
+  // Restore PR update tracking state
+  const [updatingPRs, setUpdatingPRs] = useState({});
+  
+  // Restore toast message state with auto-hide functionality
+  const [toastMessage, setToastMessage] = useState('');
+  const toastTimeoutRef = useRef(null);
+  
+  // Auto-hide toast messages after 5 seconds
+  useEffect(() => {
+    if (toastMessage) {
+      // Clear any existing timeout
+      if (toastTimeoutRef.current) {
+        clearTimeout(toastTimeoutRef.current);
+      }
+      
+      // Set a new timeout to clear the toast
+      toastTimeoutRef.current = setTimeout(() => {
+        setToastMessage('');
+      }, 5000);
+    }
+    
+    // Cleanup timeout on component unmount
+    return () => {
+      if (toastTimeoutRef.current) {
+        clearTimeout(toastTimeoutRef.current);
+      }
+    };
+  }, [toastMessage]);
+  
+  // Listen for auth state changes
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      if (user) {
+        // User is signed in
+        const githubUser = {
+          displayName: user.displayName,
+          login: user.reloadUserInfo.screenName || user.displayName,
+          email: user.email,
+          photoURL: user.photoURL
+        };
+        setUserData(githubUser);
+        setIsLoggedIn(true);
+      } else {
+        // User is signed out
+        setUserData(null);
+        setIsLoggedIn(false);
+      }
+    });
+    
+    // Cleanup subscription
+    return () => unsubscribe();
+  }, []);
+  
+  // Auto-fetch data when user is logged in
+  useEffect(() => {
+    if (isLoggedIn && userData) {
+      if (selectedRepos.length > 0) {
+        fetchRepositories(1);
+        fetchPullRequests();
+      } else {
+        setRepositories(DEFAULT_REPOS);
+        setSelectedRepos(DEFAULT_REPOS);
+        fetchPullRequests();
+      }
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isLoggedIn, userData]);
+  
+  // Save custom slack links to localStorage when they change
+  useEffect(() => {
+    localStorage.setItem('custom_slack_links', JSON.stringify(customSlackLinks));
+  }, [customSlackLinks]);
+  
   // Save settings to localStorage when they change
   useEffect(() => {
-    localStorage.setItem('github_token', githubToken);
-    localStorage.setItem('slack_token', slackToken);
-    localStorage.setItem('slack_channel', slackChannel);
     localStorage.setItem('team_members', JSON.stringify(teamMembers));
     localStorage.setItem('selected_repos', JSON.stringify(selectedRepos));
-  }, [githubToken, slackToken, slackChannel, teamMembers, selectedRepos]);
+  }, [teamMembers, selectedRepos]);
 
-  // Fetch repositories when token is available
+  // Auto-fetch pull requests when repositories are loaded and user is logged in
   useEffect(() => {
-    if (githubToken) {
-      fetchRepositories(1);
-    }
-  }, [githubToken]);
-
-  // Auto-fetch pull requests when repositories are loaded and token is available
-  useEffect(() => {
-    if (githubToken && selectedRepos.length > 0 && repositories.length > 0) {
+    if (isLoggedIn && selectedRepos.length > 0 && repositories.length > 0) {
       fetchPullRequests();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [githubToken, repositories]);
+  }, [isLoggedIn, repositories]);
+  
+  // Check if user is a member of the organization - with enhanced security
+  const checkOrgMembership = async (token, username) => {
+    if (!token || !username || !organization) {
+      console.error('Missing required parameters for org membership check');
+      return false;
+    }
+    
+    try {
+      // Create Octokit instance with the user's access token from GitHub Auth
+      const octokit = new Octokit({ auth: token });
+      
+      // PRIORITIZE REPO ACCESS CHECK - This is most reliable for private orgs
+      // Check if user can access org repos - this confirms org membership
+      try {
+        const { data: repos } = await octokit.repos.listForOrg({
+          org: organization,
+          per_page: 1
+        });
+        
+        if (repos && repos.length > 0) {
+          return true;
+        }
+      } catch (reposError) {
+        console.log('Org repos check error:', reposError.message);
+        // Continue to other checks
+      }
+      
+      // If we've reached here, we couldn't confirm membership
+      console.warn(`Could not confirm membership in ${organization} for ${username}`);
+      
+      return false;
+    } catch (error) {
+      console.error('Organization membership check error:', error);
+      setError(`There was a problem verifying your access to the ${organization} organization.`);
+      return false;
+    }
+  };
+  
+  // Sign in with GitHub - Enhanced security
+  const signInWithGitHub = async () => {
+    try {
+      setError('');
+      setLoading(true);
+      auth.useDeviceLanguage();
+      
+      try {
+        const result = await signInWithPopup(auth, githubProvider);
+        
+        const credential = GithubAuthProvider.credentialFromResult(result);
+        if (!credential) {
+          throw new Error('Failed to get credentials from GitHub');
+        }
+        
+        const token = credential.accessToken;
+        const username = result.user.reloadUserInfo.screenName || result.user.displayName;
+        
+        if (!username) {
+          await signOut(auth);
+          setError('Could not retrieve GitHub username.');
+          setLoading(false);
+          return;
+        }
+        
+        // Store user info before checking org access
+        setUserData({
+          displayName: result.user.displayName,
+          login: username,
+          email: result.user.email,
+          photoURL: result.user.photoURL
+        });
+        
+        const hasOrgAccess = await checkOrgMembership(token, username);
+        
+        if (!hasOrgAccess) {
+          await signOut(auth);
+          setUserData(null);
+          setError(`We could not verify your access to the ${organization} organization. Please make sure you have access to this organization and have granted the correct permissions.`);
+          setLoading(false);
+          return;
+        }
+        
+        setIsLoggedIn(true);
+        
+        // Show success message
+        setToastMessage(`Welcome, ${username}! You've successfully logged in.`);
+        
+        // Successfully authenticated and validated membership
+        fetchRepositories(1);
+      } catch (error) {
+        console.error('Sign in error:', error);
+        setError(`Failed to sign in with GitHub: ${error.message}`);
+      }
+      
+      setLoading(false);
+    } catch (error) {
+      setLoading(false);
+      console.error('Sign in flow error:', error);
+      setError(`Failed to start sign in flow: ${error.message}`);
+    }
+  };
+  
+  // Handle user logout
+  const handleLogout = async () => {
+    try {
+      await signOut(auth);
+      setIsLoggedIn(false);
+      setUserData(null);
+      setPullRequests([]);
+    } catch (error) {
+      setError(`Failed to sign out: ${error.message}`);
+    }
+  };
 
+  // Open the Slack link modal for a PR
+  const openSlackLinkModal = useCallback((pr, currentLink) => {
+    // Save current scroll position
+    scrollPositionRef.current = window.scrollY;
+    
+    // Prevent body scrolling without changing position
+    document.body.classList.add('modal-open');
+    
+    // Set initial input value
+    modalInputRef.current = currentLink || '';
+    
+    // Set modal state
+    setSlackLinkModal({
+      isOpen: true,
+      prId: `${pr.repo}-${pr.number}`,
+      currentLink: currentLink || ''
+    });
+    
+    // Focus the input after modal is shown
+    setTimeout(() => {
+      if (slackLinkInputRef.current) {
+        slackLinkInputRef.current.focus();
+      }
+    }, 50);
+  }, []);
+  
+  // Close the Slack link modal
+  const closeSlackLinkModal = useCallback(() => {
+    // Restore body scrolling
+    document.body.classList.remove('modal-open');
+    
+    // Clear modal state
+    setSlackLinkModal({
+      isOpen: false,
+      prId: null,
+      currentLink: ''
+    });
+    modalInputRef.current = '';
+  }, []);
+  
+  // Update the PR description with the Slack link
+  const updatePRDescription = async (pr, slackLink) => {
+    try {
+      if (!GITHUB_TOKEN || !isLoggedIn) {
+        setError('GitHub token not available or user not logged in');
+        return;
+      }
+      
+      // Track PR update state with loading indicator
+      const prKey = `${pr.repo}-${pr.number}`;
+      setUpdatingPRs(prev => ({
+        ...prev,
+        [prKey]: true
+      }));
+      
+      const octokit = new Octokit({ auth: GITHUB_TOKEN });
+      
+      // Get current PR details to make sure we have the latest body
+      const { data: currentPR } = await octokit.pulls.get({
+        owner: organization,
+        repo: pr.repo,
+        pull_number: pr.number
+      });
+      
+      let newBody = currentPR.body || '';
+      
+      // Check if there's already a Slack link in the description
+      const slackLinkRegex = /(https:\/\/[a-zA-Z0-9-]+\.slack\.com\/[a-zA-Z0-9\/#@_\-=&.:]+)/g;
+      if (slackLinkRegex.test(newBody)) {
+        // Replace existing Slack link
+        newBody = newBody.replace(slackLinkRegex, `${slackLink}`);
+      } else {
+        // Add new Slack link at the end of the description
+        newBody = newBody.trim();
+        newBody += newBody ? '\n\n' : '';
+        newBody += `${slackLink}`;
+      }
+      
+      // Update the PR description
+      await octokit.pulls.update({
+        owner: organization,
+        repo: pr.repo,
+        pull_number: pr.number,
+        body: newBody
+      });
+      
+      // Update succeeded, show confirmation toast message
+      setToastMessage(`Updated PR #${pr.number} with Slack thread link`);
+      
+      // Mark this PR as no longer updating
+      setUpdatingPRs(prev => {
+        const updated = { ...prev };
+        delete updated[prKey];
+        return updated;
+      });
+    } catch (err) {
+      // Mark this PR as no longer updating
+      setUpdatingPRs(prev => {
+        const updated = { ...prev };
+        delete updated[`${pr.repo}-${pr.number}`];
+        return updated;
+      });
+      
+      console.error('Failed to update PR description:', err);
+      setError(`Failed to update PR description: ${err.message}`);
+    }
+  };
+  
+  // Save the Slack link from modal
+  const saveSlackLinkFromModal = useCallback(() => {
+    if (!slackLinkModal.prId) return;
+    
+    const { prId } = slackLinkModal;
+    const inputValue = modalInputRef.current;
+    
+    if (inputValue && inputValue.trim()) {
+      // More thorough URL validation
+      try {
+        const url = new URL(inputValue.trim());
+        if (!url.hostname.endsWith('.slack.com')) {
+          setError('Please enter a valid Slack link');
+          return;
+        }
+        
+        const trimmedLink = inputValue.trim();
+        setCustomSlackLinks({
+          ...customSlackLinks,
+          [prId]: trimmedLink
+        });
+        
+        // Find the PR to update description
+        const pr = pullRequests.find(p => `${p.repo}-${p.number}` === prId);
+        if (pr) {
+          // Update PR description with the Slack link
+          updatePRDescription(pr, trimmedLink);
+        }
+      } catch (e) {
+        setError('Please enter a valid URL');
+        return;
+      }
+    } else {
+      const updatedLinks = { ...customSlackLinks };
+      delete updatedLinks[prId];
+      setCustomSlackLinks(updatedLinks);
+    }
+    
+    closeSlackLinkModal();
+  }, [slackLinkModal, customSlackLinks, pullRequests, closeSlackLinkModal, setError, setCustomSlackLinks, updatePRDescription]);
+  
+  // Extract the first Slack link from PR description with proper validation
+  const extractSlackLink = (description) => {
+    if (!description) return null;
+    const matches = description.match(SLACK_LINK_REGEX);
+    
+    if (matches && matches[1]) {
+      // Additional validation for Slack URL
+      try {
+        const url = new URL(matches[1]);
+        if (url.hostname.endsWith('.slack.com')) {
+          return matches[1];
+        }
+      } catch (e) {
+        console.error('Invalid Slack URL:', e);
+      }
+    }
+    return null;
+  };
+  
+  // Find PRs with same branch and check if any have a Slack link
+  const findPRsWithSameBranch = (pr) => {
+    const branch = pr.head.ref;
+    const prsWithSameBranch = pullRequests.filter(
+      otherPr => otherPr.head.ref === branch && otherPr.id !== pr.id
+    );
+    
+    return prsWithSameBranch.find(otherPr => 
+      extractSlackLink(otherPr.body) || customSlackLinks[`${otherPr.repo}-${otherPr.number}`]
+    );
+  };
+  
+  // Get the Slack link for a PR
+  const getSlackLink = (pr) => {
+    const customLink = customSlackLinks[`${pr.repo}-${pr.number}`];
+    if (customLink) return customLink;
+    return extractSlackLink(pr.body);
+  };
+  
+  // Copy a Slack link from another PR with the same branch
+  const copySlackLinkFromSameBranch = (pr, otherPr) => {
+    const otherPrLink = getSlackLink(otherPr);
+    if (otherPrLink) {
+      setCustomSlackLinks({
+        ...customSlackLinks,
+        [`${pr.repo}-${pr.number}`]: otherPrLink
+      });
+      
+      // Update PR description with the copied Slack link
+      updatePRDescription(pr, otherPrLink);
+    }
+  };
+  
   // Function to fetch repositories with pagination
   const fetchRepositories = async (pageNum) => {
-    if (!githubToken) return;
+    if (!isLoggedIn) return;
     
     setRepoLoading(true);
     setError('');
     
     try {
-      const octokit = new Octokit({ auth: githubToken });
-      const response = await octokit.repos.listForOrg({
-        org: organization,
-        per_page: 50,
-        page: pageNum
-      });
-      
-      if (pageNum === 1) {
-        setRepositories(response.data.map(repo => repo.name));
-      } else {
-        setRepositories(prev => [...prev, ...response.data.map(repo => repo.name)]);
+      if (!GITHUB_TOKEN) {
+        setRepositories(DEFAULT_REPOS);
+        setRepoLoading(false);
+        return;
       }
       
-      // Check if there are more pages
-      const linkHeader = response.headers.link;
-      setHasNextPage(linkHeader && linkHeader.includes('rel="next"'));
-      setPage(pageNum);
+      const octokit = new Octokit({ auth: GITHUB_TOKEN });
+      
+      try {
+        const response = await octokit.repos.listForOrg({
+          org: organization,
+          per_page: 50,
+          page: pageNum
+        });
+        
+        if (pageNum === 1) {
+          setRepositories(response.data.map(repo => repo.name));
+        } else {
+          setRepositories(prev => [...prev, ...response.data.map(repo => repo.name)]);
+        }
+        
+        const linkHeader = response.headers.link;
+        setHasNextPage(linkHeader && linkHeader.includes('rel="next"'));
+        setPage(pageNum);
+      } catch (apiErr) {
+        setRepositories(DEFAULT_REPOS);
+        setHasNextPage(false);
+        
+        if (pageNum > 1) {
+          setError(`Couldn't load additional repositories: ${apiErr.message}`);
+        }
+      }
+      
       setRepoLoading(false);
     } catch (err) {
-      setError(`Error fetching repositories: ${err.message}`);
+      setRepositories(DEFAULT_REPOS);
       setRepoLoading(false);
     }
   };
@@ -100,204 +558,127 @@ function App() {
     fetchRepositories(page + 1);
   };
 
-  // Function to fetch PRs with filtering
+  // Function to fetch PRs with filtering - optimized with parallel requests only
   const fetchPullRequests = async () => {
-    if (!githubToken || selectedRepos.length === 0) {
-      setError('Please provide GitHub token and select at least one repository.');
+    if (!isLoggedIn || selectedRepos.length === 0) {
+      setError('Please log in and select at least one repository.');
       return;
     }
     
     setLoading(true);
     setPullRequests([]);
     setError('');
+    setLoadingProgress({ total: selectedRepos.length * 2, completed: 0, stage: 'Fetching pull requests' });
     
     try {
-      const octokit = new Octokit({ auth: githubToken });
-      const allPRs = [];
+      const octokit = new Octokit({ auth: GITHUB_TOKEN });
       
-      // For each selected repository
-      for (const repo of selectedRepos) {
-        // Get open PRs for the repo
-        const prs = await octokit.pulls.list({
+      // Step 1: Fetch all PRs from all repos in parallel
+      const prFetchPromises = selectedRepos.map((repo, index) => 
+        octokit.pulls.list({
           owner: organization,
           repo: repo,
-          state: 'open',  // Only fetch open PRs
+          state: 'open',
           per_page: 100
-        });
-        
-        // Filter PRs by team members
-        const teamPRs = prs.data.filter(pr => {
-          // Check if PR author is a team member
-          const isAuthor = teamMembers.includes(pr.user.login);
-          // Or if any team member is a reviewer
-          const isReviewer = pr.requested_reviewers && 
-            pr.requested_reviewers.some(reviewer => teamMembers.includes(reviewer.login));
-          
-          return isAuthor || isReviewer;
-        });
-        
-        // Get PR reviews and mergeable status for each team PR
-        for (const pr of teamPRs) {
-          const reviews = await octokit.pulls.listReviews({
-            owner: organization,
-            repo: repo,
-            pull_number: pr.number
-          });
-          
-          // Get detailed PR info to get mergeable status
-          const prDetail = await octokit.pulls.get({
-            owner: organization,
-            repo: repo,
-            pull_number: pr.number
-          });
-          
-          // Get branch protection rules for accurate mergeable info
-          let mergeBlockReason = null;
-          try {
-            // Try to get repo branch protection info if available
-            const branchProtection = await octokit.repos.getBranchProtection({
-              owner: organization,
-              repo: repo,
-              branch: prDetail.data.base.ref
-            });
-            
-            // Check if required reviews are satisfied
-            if (branchProtection.data.required_pull_request_reviews) {
-              const requiredCount = branchProtection.data.required_pull_request_reviews.required_approving_review_count || 0;
-              const approvalCount = reviews.data.filter(r => r.state === 'APPROVED').length;
-              
-              if (approvalCount < requiredCount) {
-                mergeBlockReason = `Needs ${requiredCount - approvalCount} more ${requiredCount - approvalCount === 1 ? 'approval' : 'approvals'}`;
-              }
-            }
-          } catch (err) {
-            // Branch protection might not be available or accessible
-            // Just continue without this data
-            console.log(`Branch protection not available for ${repo}/${prDetail.data.base.ref}`);
-          }
-          
-          // Check if PR has requests for review but no approvals yet
-          const hasRequestedReviewers = pr.requested_reviewers && pr.requested_reviewers.length > 0;
-          const approvalCount = reviews.data.filter(r => r.state === 'APPROVED').length;
-          
-          if (hasRequestedReviewers && approvalCount === 0 && !mergeBlockReason) {
-            mergeBlockReason = 'Waiting for reviews';
-          }
-          
-          allPRs.push({
+        }).then(response => {
+          setLoadingProgress(prev => ({ 
+            ...prev, 
+            completed: prev.completed + 1,
+            stage: `Fetched PRs from ${index + 1}/${selectedRepos.length} repos`
+          }));
+          return response.data.map(pr => ({
             ...pr,
-            repo,
-            reviews: reviews.data,
-            teamMember: teamMembers.find(member => member === pr.user.login),
-            reviewers: pr.requested_reviewers || [],
-            slackMessages: [], // Initialize with empty array
-            mergeable: prDetail.data.mergeable,
-            mergeable_state: prDetail.data.mergeable_state,
-            mergeBlockReason
-          });
-        }
-      }
+            repo
+          }));
+        })
+      );
       
-      setPullRequests(allPRs);
-      setLoading(false);
+      // Wait for all PR fetch operations to complete
+      const prArrays = await Promise.all(prFetchPromises);
       
-      // Auto-collapse settings after fetching PRs if there are results
-      if (allPRs.length > 0) {
-        setSettingsExpanded(false);
+      // Flatten the array of arrays into a single array
+      const allPRsRaw = prArrays.flat();
+      
+      // Filter PRs by team members
+      const teamPRs = allPRsRaw.filter(pr => {
+        const isAuthor = teamMembers.includes(pr.user.login);
+        const isReviewer = pr.requested_reviewers && 
+          pr.requested_reviewers.some(reviewer => teamMembers.includes(reviewer.login));
         
-        // Reset repo filter when new PRs are fetched
-        setRepoFilter('all');
+        return isAuthor || isReviewer;
+      });
+      
+      // Exit early if no PRs found
+      if (teamPRs.length === 0) {
+        setLoading(false);
+        setLoadingProgress({ total: 0, completed: 0, stage: '' });
+        return;
       }
       
-      // If Slack token and channel are available, search for messages related to these PRs
-      if (slackToken && slackChannel && allPRs.length > 0) {
-        fetchSlackMessages(allPRs);
+      setLoadingProgress(prev => ({ 
+        ...prev, 
+        total: prev.total + teamPRs.length,
+        stage: `Loading details for ${teamPRs.length} pull requests`
+      }));
+      
+      // Step 2: Batch fetch PR reviews and details in parallel
+      const prDetailsPromises = teamPRs.map((pr, index) => {
+        const reviewsPromise = octokit.pulls.listReviews({
+          owner: organization,
+          repo: pr.repo,
+          pull_number: pr.number
+        });
+        
+        // Only fetch details when needed for mergeable status
+        const detailsPromise = octokit.pulls.get({
+          owner: organization,
+          repo: pr.repo,
+          pull_number: pr.number
+        });
+        
+        return Promise.all([reviewsPromise, detailsPromise])
+          .then(([reviewsResponse, prDetailResponse]) => {
+            setLoadingProgress(prev => ({ 
+              ...prev, 
+              completed: prev.completed + 1,
+              stage: `Loaded details for PR #${pr.number} (${index + 1}/${teamPRs.length})`
+            }));
+            
+            const hasRequestedReviewers = pr.requested_reviewers && pr.requested_reviewers.length > 0;
+            const approvalCount = reviewsResponse.data.filter(r => r.state === 'APPROVED').length;
+            
+            let mergeBlockReason = null;
+            if (hasRequestedReviewers && approvalCount === 0) {
+              mergeBlockReason = 'Waiting for reviews';
+            }
+            
+            return {
+              ...pr,
+              reviews: reviewsResponse.data,
+              teamMember: teamMembers.find(member => member === pr.user.login),
+              reviewers: pr.requested_reviewers || [],
+              mergeable: prDetailResponse.data.mergeable,
+              mergeable_state: prDetailResponse.data.mergeable_state,
+              mergeBlockReason
+            };
+          });
+      });
+      
+      // Process all PR details in parallel
+      const processedPRs = await Promise.all(prDetailsPromises);
+      
+      setPullRequests(processedPRs);
+      setLoading(false);
+      setLoadingProgress({ total: 0, completed: 0, stage: '' });
+      
+      if (processedPRs.length > 0) {
+        setSettingsExpanded(false);
+        setRepoFilter('all');
       }
     } catch (err) {
       setError(`Error fetching pull requests: ${err.message}`);
       setLoading(false);
-    }
-  };
-  
-  // Function to fetch Slack messages related to PRs
-  const fetchSlackMessages = async (prs) => {
-    if (!slackToken || !slackChannel) {
-      setSlackError('Slack token and channel are required to fetch Slack messages.');
-      return;
-    }
-    
-    setSlackLoading(true);
-    setSlackError('');
-    
-    try {
-      // Create a deep copy of the PRs array to add Slack messages
-      const updatedPRs = JSON.parse(JSON.stringify(prs));
-      
-      // For each PR, search for messages that contain its URL
-      for (let i = 0; i < updatedPRs.length; i++) {
-        const pr = updatedPRs[i];
-        const prUrl = pr.html_url;
-        
-        // Slack API call to search for messages
-        const response = await fetch('https://slack.com/api/conversations.history', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/x-www-form-urlencoded',
-            'Authorization': `Bearer ${slackToken}`
-          },
-          body: new URLSearchParams({
-            channel: slackChannel,
-            limit: 100
-          })
-        });
-        
-        const data = await response.json();
-        
-        if (!data.ok) {
-          throw new Error(data.error || 'Unknown Slack API error');
-        }
-        
-        // Filter messages that contain the PR URL
-        const relatedMessages = data.messages
-          .filter(msg => msg.text && msg.text.includes(prUrl))
-          .map(msg => ({
-            ts: msg.ts,
-            text: msg.text,
-            user: msg.user,
-            permalink: '' // Will be populated in the next step
-          }));
-        
-        // Get permalink for each message
-        for (let j = 0; j < relatedMessages.length; j++) {
-          const msg = relatedMessages[j];
-          
-          const permalinkResponse = await fetch('https://slack.com/api/chat.getPermalink', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/x-www-form-urlencoded',
-              'Authorization': `Bearer ${slackToken}`
-            },
-            body: new URLSearchParams({
-              channel: slackChannel,
-              message_ts: msg.ts
-            })
-          });
-          
-          const permalinkData = await permalinkResponse.json();
-          
-          if (permalinkData.ok) {
-            relatedMessages[j].permalink = permalinkData.permalink;
-          }
-        }
-        
-        updatedPRs[i].slackMessages = relatedMessages;
-      }
-      
-      setPullRequests(updatedPRs);
-      setSlackLoading(false);
-    } catch (err) {
-      setSlackError(`Error fetching Slack messages: ${err.message}`);
-      setSlackLoading(false);
+      setLoadingProgress({ total: 0, completed: 0, stage: '' });
     }
   };
 
@@ -330,7 +711,6 @@ function App() {
     const reviewerLogins = pr.reviewers.map(r => r.login);
     const completedReviews = {};
     
-    // Count completed reviews by reviewer
     pr.reviews.forEach(review => {
       if (review.state !== 'COMMENTED') {
         completedReviews[review.user.login] = review.state;
@@ -343,6 +723,16 @@ function App() {
       states: completedReviews,
       hasReviews: pr.reviews.length > 0
     };
+  };
+  
+  // Get unresolved comments count
+  const getUnresolvedCommentsCount = (pr) => {
+    // Count CHANGES_REQUESTED reviews as these contain unresolved comments
+    const changesRequestedCount = pr.reviews.filter(review => 
+      review.state === 'CHANGES_REQUESTED'
+    ).length;
+    
+    return changesRequestedCount;
   };
   
   // Get all unique reviewers from pull requests
@@ -386,426 +776,556 @@ function App() {
     return true;
   });
 
-  return (
-    <div className="App">
-      <header className="App-header">
-        <h1>GoHighLevel PR Tracker</h1>
-        {!showInitialSetup && (
-          <div className="header-actions">
-            <select 
-              value={authorFilter} 
-              onChange={(e) => setAuthorFilter(e.target.value)}
-              className="filter-select"
-            >
-              <option value="all">All Authors</option>
-              {teamMembers.map(member => (
-                <option key={member} value={member}>{member}</option>
-              ))}
-            </select>
-            
-            <select 
-              value={reviewerFilter} 
-              onChange={(e) => setReviewerFilter(e.target.value)}
-              className="filter-select"
-            >
-              <option value="all">All Reviewers</option>
-              {getAllReviewers().map(reviewer => (
-                <option key={reviewer} value={reviewer}>{reviewer}</option>
-              ))}
-            </select>
-            
-            <select 
-              value={repoFilter} 
-              onChange={(e) => setRepoFilter(e.target.value)}
-              className="filter-select"
-            >
-              <option value="all">All Repositories</option>
-              {getAllRepos().map(repo => (
-                <option key={repo} value={repo}>{repo}</option>
-              ))}
-            </select>
-            
-            <button 
-              className="refresh-button"
-              onClick={fetchPullRequests}
-              disabled={loading}
-            >
-              {loading ? 'Refreshing...' : 'Refresh PRs'}
-            </button>
-          </div>
-        )}
-      </header>
-      
-      {showInitialSetup ? (
-        <div className="settings-panel">
-          <h2>Initial Setup</h2>
-          <div className="form-group">
-            <label>GitHub Personal Access Token:</label>
-            <input 
-              type="password" 
-              value={githubToken}
-              onChange={(e) => setGithubToken(e.target.value)}
-              placeholder="ghp_your_personal_access_token"
-            />
-            <p className="help-text">
-              Your token needs <code>repo</code> scope permissions.
-              <a href="https://github.com/settings/tokens/new" target="_blank" rel="noopener noreferrer">
-                Create a token
-              </a>
-            </p>
-            <button 
-              className="save-token-button"
-              onClick={() => {
-                if (githubToken) {
-                  setShowInitialSetup(false);
-                  fetchRepositories(1);
-                }
-              }}
-            >
-              Save Token
-            </button>
+  // Use default repositories
+  const useDefaultRepos = () => {
+    setRepositories(DEFAULT_REPOS);
+    setSelectedRepos(DEFAULT_REPOS);
+    setRepoLoading(false);
+    setError('');
+    
+    if (isLoggedIn) {
+      fetchPullRequests();
+    }
+  };
+
+  // Render login component with security notices
+  const renderLogin = () => (
+    <div className="login-container">
+      <h2>Welcome to GitHub PR Tracker</h2>
+      <p>Track and manage pull requests for your team's repositories</p>
+      <p><small>Note: You must be a member of the {organization} organization to use this app.</small></p>
+      <button onClick={signInWithGitHub} className="github-login-button" disabled={loading}>
+        {loading ? 'Authenticating...' : 'Login with GitHub'}
+      </button>
+      {error && <div className="security-error-message">{error}</div>}
+    </div>
+  );
+
+  // Render header component with organization name
+  const renderHeader = () => (
+    <header className="App-header">
+      <h1>{organization} PR Tracker</h1>
+      {isLoggedIn && userData && (
+        <div className="header-actions">
+          <span className="user-info">
+            Welcome, {sanitizeText(userData.login)}
+          </span>
+          <select 
+            value={authorFilter} 
+            onChange={(e) => setAuthorFilter(e.target.value)}
+            className="filter-select"
+          >
+            <option value="all">All Authors</option>
+            {teamMembers.map(member => (
+              <option key={sanitizeText(member)} value={member}>{sanitizeText(member)}</option>
+            ))}
+          </select>
+          
+          <select 
+            value={reviewerFilter} 
+            onChange={(e) => setReviewerFilter(e.target.value)}
+            className="filter-select"
+          >
+            <option value="all">All Reviewers</option>
+            {getAllReviewers().map(reviewer => (
+              <option key={sanitizeText(reviewer)} value={reviewer}>{sanitizeText(reviewer)}</option>
+            ))}
+          </select>
+          
+          <select 
+            value={repoFilter} 
+            onChange={(e) => setRepoFilter(e.target.value)}
+            className="filter-select"
+          >
+            <option value="all">All Repositories</option>
+            {getAllRepos().map(repo => (
+              <option key={sanitizeText(repo)} value={repo}>{sanitizeText(repo)}</option>
+            ))}
+          </select>
+          
+          <button 
+            className="refresh-button"
+            onClick={fetchPullRequests}
+            disabled={loading}
+            title="Fetch latest PR data"
+          >
+            {loading ? 'Refreshing...' : 'Refresh PRs'}
+          </button>
+          
+          <button 
+            className="logout-button"
+            onClick={handleLogout}
+          >
+            Logout
+          </button>
+        </div>
+      )}
+      {toastMessage && (
+        <div className="toast-message">
+          <div className="toast-content">
+            <span className="toast-icon">✓</span>
+            {toastMessage}
+            <button className="toast-close" onClick={() => setToastMessage('')}>×</button>
           </div>
         </div>
-      ) : (
-        <div className="main-content">
-          <div className={`settings-panel ${settingsExpanded ? 'expanded' : 'collapsed'}`}>
-            <div className="settings-header" onClick={() => setSettingsExpanded(!settingsExpanded)}>
-              <h2>Settings</h2>
-              <div className="settings-actions">
-                <button className="toggle-button" onClick={(e) => {
-                  e.stopPropagation();
-                  setSettingsExpanded(!settingsExpanded);
-                }}>
-                  {settingsExpanded ? '▼ Collapse' : '▲ Expand'}
-                </button>
-              </div>
-            </div>
-            
-            {settingsExpanded && (
-              <>
-                <div className="settings-tabs">
-                  <button 
-                    className={`settings-tab ${activeSettingsTab === 'general' ? 'active' : ''}`}
-                    onClick={() => setActiveSettingsTab('general')}
-                  >
-                    General
-                  </button>
-                  <button 
-                    className={`settings-tab ${activeSettingsTab === 'github' ? 'active' : ''}`}
-                    onClick={() => setActiveSettingsTab('github')}
-                  >
-                    GitHub Token
-                  </button>
-                  <button 
-                    className={`settings-tab ${activeSettingsTab === 'slack' ? 'active' : ''}`}
-                    onClick={() => setActiveSettingsTab('slack')}
-                  >
-                    Slack Integration
-                  </button>
-                </div>
-                
-                {activeSettingsTab === 'github' && (
-                  <div className="settings-tab-content">
-                    <div className="github-settings">
-                      <h3>GitHub Authentication</h3>
-                      <div className="form-group">
-                        <label>GitHub Personal Access Token:</label>
-                        <input 
-                          type="password" 
-                          value={githubToken}
-                          onChange={(e) => setGithubToken(e.target.value)}
-                          placeholder="ghp_your_personal_access_token"
-                        />
-                        <p className="help-text">
-                          Your token needs <code>repo</code> scope permissions.
-                          <a href="https://github.com/settings/tokens/new" target="_blank" rel="noopener noreferrer">
-                            Create a token
-                          </a>
-                        </p>
-                        <button 
-                          className="save-settings-button"
-                          onClick={() => {
-                            if (githubToken) {
-                              fetchRepositories(1);
-                              setActiveSettingsTab('general');
-                            }
-                          }}
-                        >
-                          Save GitHub Token
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                )}
-                
-                {activeSettingsTab === 'slack' && (
-                  <div className="settings-tab-content">
-                    <div className="slack-settings">
-                      <h3>Slack Integration</h3>
-                      <p className="help-text">
-                        Connect to Slack to find PR-related messages in a specific channel.
-                      </p>
-                      
-                      <div className="form-group">
-                        <label>Slack Bot Token:</label>
-                        <input 
-                          type="password" 
-                          value={slackToken}
-                          onChange={(e) => setSlackToken(e.target.value)}
-                          placeholder="xoxb-your-slack-bot-token"
-                        />
-                        <p className="help-text">
-                          Requires a bot token with <code>channels:history</code>, <code>chat:write</code>, and <code>links:read</code> permissions.
-                          <a href="https://api.slack.com/apps" target="_blank" rel="noopener noreferrer">
-                            Create a Slack app
-                          </a>
-                        </p>
-                      </div>
-                      
-                      <div className="form-group">
-                        <label>Slack Channel ID:</label>
-                        <input 
-                          type="text" 
-                          value={slackChannel}
-                          onChange={(e) => setSlackChannel(e.target.value)}
-                          placeholder="C012AB3CD45"
-                        />
-                        <p className="help-text">
-                          The ID of the channel to search for PR messages. Must start with C or D.
-                        </p>
-                      </div>
-                      
-                      {slackError && <div className="error-message">{slackError}</div>}
-                      
-                      <button 
-                        className="save-settings-button"
-                        onClick={() => {
-                          setActiveSettingsTab('general');
-                          if (pullRequests.length > 0 && slackToken && slackChannel) {
-                            fetchSlackMessages(pullRequests);
-                          }
-                        }}
-                      >
-                        Save Slack Settings
-                      </button>
-                    </div>
-                  </div>
-                )}
-                
-                {activeSettingsTab === 'general' && (
-                  <div className="settings-tab-content">
-                    <div className="settings-layout">
-                      <div className="settings-column">
-                        <div className="form-group">
-                          <label>Team Members:</label>
-                          <div className="team-members-input">
-                            <input 
-                              type="text"
-                              value={newTeamMember}
-                              onChange={(e) => setNewTeamMember(e.target.value)}
-                              placeholder="Add GitHub username"
-                              onKeyPress={(e) => e.key === 'Enter' && addTeamMember()}
-                            />
-                            <button onClick={addTeamMember} className="add-button">Add</button>
-                          </div>
-                          <ul className="team-members-list">
-                            {teamMembers.map(member => (
-                              <li key={member} className={DEFAULT_TEAM_MEMBERS.includes(member) ? 'preset-item' : ''}>
-                                {member}
-                                <button onClick={() => removeTeamMember(member)} className="remove-button">✕</button>
-                              </li>
-                            ))}
-                          </ul>
-                        </div>
-                      </div>
-                      
-                      <div className="settings-column">
-                        <div className="form-group">
-                          <label>Repositories:</label>
-                          <div className="repo-search">
-                            <input
-                              type="text"
-                              placeholder="Search repositories..."
-                              value={searchTerm}
-                              onChange={(e) => setSearchTerm(e.target.value)}
-                            />
-                          </div>
-                          <div className="repositories-list">
-                            {repositories
-                              .filter(repo => repo.toLowerCase().includes(searchTerm.toLowerCase()))
-                              .map(repo => (
-                                <div key={repo} className={`repo-item ${DEFAULT_REPOS.includes(repo) ? 'preset-repo' : ''}`}>
-                                  <label className="repo-label">
-                                    <input
-                                      type="checkbox"
-                                      checked={selectedRepos.includes(repo)}
-                                      onChange={() => toggleRepository(repo)}
-                                    />
-                                    <span className="repo-name">{repo}</span>
-                                  </label>
-                                </div>
-                              ))}
-                            {repoLoading && (
-                              <div className="loading-more">Loading repositories...</div>
-                            )}
-                            {hasNextPage && !repoLoading && (
-                              <button className="load-more-button" onClick={loadMoreRepos}>
-                                Load More Repositories
-                              </button>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                )}
-                
-                {activeSettingsTab === 'general' && (
-                  <div className="fetch-pr-container">
-                    <button 
-                      className="fetch-button"
-                      onClick={fetchPullRequests}
-                      disabled={loading}
-                    >
-                      {loading ? 'Loading Pull Requests...' : 'Fetch Pull Requests'}
-                    </button>
-                  </div>
-                )}
-              </>
-            )}
-            
-            {error && <div className="error-message">{error}</div>}
+      )}
+    </header>
+  );
+
+  // Render settings panel
+  const renderSettingsPanel = () => (
+    <div className={`settings-panel ${settingsExpanded ? 'expanded' : 'collapsed'}`}>
+      <div className="settings-header" onClick={() => setSettingsExpanded(!settingsExpanded)}>
+        <h2>Settings</h2>
+        <div className="settings-actions">
+          <button className="toggle-button" onClick={(e) => {
+            e.stopPropagation();
+            setSettingsExpanded(!settingsExpanded);
+          }}>
+            {settingsExpanded ? '▼ Collapse' : '▲ Expand'}
+          </button>
+        </div>
+      </div>
+      
+      {settingsExpanded && (
+        <>
+          <div className="settings-tabs">
+            <button 
+              className={`settings-tab ${activeSettingsTab === 'general' ? 'active' : ''}`}
+              onClick={() => setActiveSettingsTab('general')}
+            >
+              General
+            </button>
           </div>
           
-          {loading ? (
-            <div className="loading-container">
-              <div className="loading-spinner"></div>
-              <p>Fetching pull requests...</p>
-            </div>
-          ) : slackLoading ? (
-            <div className="loading-container">
-              <div className="loading-spinner"></div>
-              <p>Fetching Slack messages...</p>
-            </div>
-          ) : filteredPRs.length > 0 ? (
-            <div className="pr-results">
-              <h2>Open Pull Requests {filteredPRs.length > 0 && `(${filteredPRs.length})`}</h2>
-              <div className="pr-table-container">
-                <table className="pr-table">
-                  <thead>
-                    <tr>
-                      <th>Title</th>
-                      <th>Author</th>
-                      <th>Created</th>
-                      <th>Review Status</th>
-                      <th>Mergeable</th>
-                      <th>Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filteredPRs.map(pr => {
-                      const reviewStatus = getReviewStatus(pr);
-                      return (
-                        <tr key={`${pr.repo}-${pr.number}`}>
-                          <td className="pr-title-cell">
-                            <span className="pr-repo-badge">{pr.repo}</span>
-                            <span className="pr-number">#{pr.number}</span>
-                            <a href={pr.html_url} target="_blank" rel="noopener noreferrer" className="pr-title-link">
-                              {pr.title}
-                            </a>
-                            <div className="pr-branch">
-                              <span className="branch-label">Branch:</span> {pr.head.ref}
-                            </div>
-                          </td>
-                          <td>
-                            <div className="pr-author">
-                              {pr.user.login}
-                            </div>
-                          </td>
-                          <td>
-                            {formatDate(pr.created_at)}
-                          </td>
-                          <td className="review-status-cell">
-                            <div className="review-badges">
-                              {reviewStatus.pending.length > 0 && (
-                                <span className="review-badge pending">
-                                  {reviewStatus.pending.length} pending
-                                </span>
-                              )}
-                              {Object.entries(reviewStatus.states).map(([reviewer, state]) => (
-                                <span 
-                                  key={reviewer} 
-                                  className={`review-badge ${state === 'APPROVED' ? 'approved' : state === 'CHANGES_REQUESTED' ? 'changes-requested' : ''}`}
-                                >
-                                  {reviewer} {state === 'APPROVED' ? '✓' : state === 'CHANGES_REQUESTED' ? '×' : ''}
-                                </span>
-                              ))}
-                            </div>
-                            {reviewStatus.pending.length > 0 && (
-                              <div className="pending-reviewers">
-                                <span className="pending-label">Waiting on:</span>
-                                {reviewStatus.pending.map((reviewer, index) => (
-                                  <span key={reviewer} className="pending-reviewer">
-                                    {reviewer}{index < reviewStatus.pending.length - 1 ? ', ' : ''}
-                                  </span>
-                                ))}
-                              </div>
-                            )}
-                          </td>
-                          <td className="mergeable-cell">
-                            {pr.mergeable === null ? (
-                              <span className="mergeable-badge unknown">Checking...</span>
-                            ) : pr.mergeable && pr.mergeable_state === 'clean' && !pr.mergeBlockReason ? (
-                              <span className="mergeable-badge mergeable">Yes</span>
-                            ) : (
-                              <div className="mergeable-status">
-                                <span className="mergeable-badge not-mergeable">No</span>
-                                {(pr.mergeBlockReason || 
-                                  pr.mergeable_state !== 'clean') && (
-                                  <span className="mergeable-reason">
-                                    {pr.mergeBlockReason ? pr.mergeBlockReason :
-                                     pr.mergeable_state === 'behind' ? 'Branch out of date' : 
-                                     pr.mergeable_state === 'dirty' ? 'Conflicts' : 
-                                     pr.mergeable_state === 'blocked' ? 'Checks or reviews required' : 
-                                     pr.mergeable_state === 'unstable' ? 'Tests failing' : 
-                                     pr.mergeable_state === 'has_hooks' ? 'Waiting for hooks' :
-                                     pr.mergeable_state}
-                                  </span>
-                                )}
-                              </div>
-                            )}
-                          </td>
-                          <td>
-                            <div className="action-links">
-                              <a href={pr.html_url} target="_blank" rel="noopener noreferrer" className="action-link github-link">
-                                GitHub
-                              </a>
-                              {pr.slackMessages && pr.slackMessages.length > 0 && (
-                                <a 
-                                  href={pr.slackMessages[0].permalink} 
-                                  target="_blank" 
-                                  rel="noopener noreferrer"
-                                  className="action-link slack-link"
-                                >
-                                  Slack
-                                </a>
-                              )}
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+          {activeSettingsTab === 'general' && (
+            <div className="settings-tab-content">
+              <div className="settings-layout">
+                <div className="settings-column">
+                  <div className="form-group">
+                    <label>Team Members:</label>
+                    <div className="team-members-input">
+                      <input 
+                        type="text"
+                        value={newTeamMember}
+                        onChange={(e) => setNewTeamMember(e.target.value)}
+                        placeholder="Add GitHub username"
+                        onKeyPress={(e) => e.key === 'Enter' && addTeamMember()}
+                      />
+                      <button onClick={addTeamMember} className="add-button">Add</button>
+                    </div>
+                    <ul className="team-members-list">
+                      {teamMembers.map(member => (
+                        <li key={member} className={DEFAULT_TEAM_MEMBERS.includes(member) ? 'preset-item' : ''}>
+                          {member}
+                          <button onClick={() => removeTeamMember(member)} className="remove-button">✕</button>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
+                
+                <div className="settings-column">
+                  <div className="form-group">
+                    <label>Repositories:</label>
+                    <div className="repo-actions">
+                      <div className="repo-search-container">
+                        <input
+                          type="text"
+                          placeholder="Search repositories..."
+                          value={searchTerm}
+                          onChange={(e) => setSearchTerm(e.target.value)}
+                          className="repo-search-input"
+                        />
+                      </div>
+                      <button 
+                        className="load-default-repos-button" 
+                        onClick={useDefaultRepos}
+                        title="Load predefined repositories"
+                      >
+                        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" style={{marginRight: '6px'}}>
+                          <path d="M2 2.5A2.5 2.5 0 014.5 0h7A2.5 2.5 0 0114 2.5v10.5a.5.5 0 01-.5.5H12v-1h1V2.5A1.5 1.5 0 0011.5 1h-7A1.5 1.5 0 003 2.5V13H2V2.5z" fill="currentColor" />
+                          <path d="M8 11.5A1.5 1.5 0 019.5 10h2A1.5 1.5 0 0113 11.5v2A1.5 1.5 0 0111.5 15h-2A1.5 1.5 0 018 13.5v-2zm1.5-.5a.5.5 0 00-.5.5v2a.5.5 0 00.5.5h2a.5.5 0 00.5-.5v-2a.5.5 0 00-.5-.5h-2z" fill="currentColor" />
+                          <path d="M0 5.5A1.5 1.5 0 011.5 4h2A1.5 1.5 0 015 5.5v2A1.5 1.5 0 013.5 9h-2A1.5 1.5 0 010 7.5v-2zm1.5-.5a.5.5 0 00-.5.5v2a.5.5 0 00.5.5h2a.5.5 0 00.5-.5v-2a.5.5 0 00-.5-.5h-2z" fill="currentColor" />
+                        </svg>
+                        Use Default Repos
+                      </button>
+                    </div>
+                    <div className="repositories-list">
+                      {repositories
+                        .filter(repo => repo.toLowerCase().includes(searchTerm.toLowerCase()))
+                        .map(repo => (
+                          <div key={repo} className={`repo-item ${DEFAULT_REPOS.includes(repo) ? 'preset-repo' : ''}`}>
+                            <label className="repo-label">
+                              <input
+                                type="checkbox"
+                                checked={selectedRepos.includes(repo)}
+                                onChange={() => toggleRepository(repo)}
+                              />
+                              <span className="repo-name">{repo}</span>
+                            </label>
+                          </div>
+                        ))}
+                      {repoLoading && (
+                        <div className="loading-more">Loading repositories...</div>
+                      )}
+                      {hasNextPage && !repoLoading && (
+                        <button className="load-more-button" onClick={loadMoreRepos}>
+                          Load More Repositories
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
-          ) : pullRequests.length > 0 ? (
-            <div className="no-results">
-              <h3>No pull requests match your current filters</h3>
-              <p>Try changing your filter settings or selecting different repositories</p>
+          )}
+          
+          {activeSettingsTab === 'general' && (
+            <div className="fetch-pr-container">
+              <button 
+                className="fetch-button"
+                onClick={fetchPullRequests}
+                disabled={loading}
+              >
+                {loading ? 'Loading Pull Requests...' : 'Fetch Pull Requests'}
+              </button>
             </div>
-          ) : null}
+          )}
+        </>
+      )}
+      
+      {error && <div className="error-message">{error}</div>}
+    </div>
+  );
+
+  // Render loading container with progress indicator
+  const renderLoadingContainer = () => {
+    const progressPercentage = loadingProgress.total > 0 
+      ? Math.min(Math.round((loadingProgress.completed / loadingProgress.total) * 100), 100)
+      : 0;
+    
+    return (
+      <div className="loading-container">
+        <div className="loading-spinner"></div>
+        <p>Fetching pull requests...</p>
+        {loadingProgress.total > 0 && (
+          <div className="loading-progress">
+            <div className="progress-bar">
+              <div 
+                className="progress-bar-fill" 
+                style={{ width: `${progressPercentage}%` }}
+              ></div>
+            </div>
+            <div className="progress-text">
+              {loadingProgress.stage} ({progressPercentage}%)
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  // Render PR results with improved column sizing and security
+  const renderPRResults = () => {
+    if (loading) {
+      return renderLoadingContainer();
+    }
+    
+    if (filteredPRs.length > 0) {
+      return (
+        <div className="pr-results">
+          <h2>Open Pull Requests {filteredPRs.length > 0 && `(${filteredPRs.length})`}</h2>
+          <div className="pr-table-container">
+            <table className="pr-table">
+              <thead>
+                <tr>
+                  <th>Title</th>
+                  <th>Author</th>
+                  <th>Created</th>
+                  <th className="review-status-header">Review Status</th>
+                  <th>Comments</th>
+                  <th>Mergeable</th>
+                  <th className="slack-column">Slack Thread</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredPRs.map(renderPRRow)}
+              </tbody>
+            </table>
+          </div>
         </div>
+      );
+    } else if (pullRequests.length > 0) {
+      return (
+        <div className="no-results">
+          <h3>No pull requests match your current filters</h3>
+          <p>Try changing your filter settings or selecting different repositories</p>
+        </div>
+      );
+    }
+    
+    return null;
+  };
+
+  // Create a memoized modal component to prevent unnecessary rerenders
+  const SlackLinkModal = memo(() => {
+    if (!slackLinkModal.isOpen) return null;
+    
+    // Input change handler that doesn't cause parent component rerender
+    const handleInputChange = (e) => {
+      modalInputRef.current = e.target.value;
+    };
+    
+    // Key handler for Enter and Escape
+    const handleKeyDown = (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        saveSlackLinkFromModal();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        closeSlackLinkModal();
+      }
+    };
+    
+    return (
+      <div className="modal-overlay" onClick={closeSlackLinkModal}>
+        <div className="modal-container" onClick={e => e.stopPropagation()}>
+          <div className="modal-header">
+            <h3>
+              {slackLinkModal.currentLink ? 'Edit' : 'Add'} Slack Link
+            </h3>
+            <button 
+              className="modal-close-button"
+              onClick={closeSlackLinkModal}
+            >
+              ×
+            </button>
+          </div>
+          
+          <div className="modal-body">
+            <label htmlFor="slack-link-input">Slack Thread URL:</label>
+            <input
+              id="slack-link-input"
+              type="text"
+              ref={slackLinkInputRef}
+              defaultValue={slackLinkModal.currentLink}
+              onChange={handleInputChange}
+              placeholder="https://gohighlevel.slack.com/archives/..."
+              className="modal-input"
+              onKeyDown={handleKeyDown}
+              autoFocus
+            />
+            
+            <div className="modal-help-text">
+              Add a link to the Slack thread discussing this pull request.
+              This will also be added to the PR description.
+            </div>
+          </div>
+          
+          <div className="modal-footer">
+            <button
+              className="modal-button modal-cancel"
+              onClick={closeSlackLinkModal}
+            >
+              Cancel
+            </button>
+            <button
+              className="modal-button modal-save"
+              onClick={saveSlackLinkFromModal}
+            >
+              Save
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  });
+
+  // Render a PR row with improved security - Now using modal
+  const renderPRRow = (pr) => {
+    const reviewStatus = getReviewStatus(pr);
+    const slackLink = getSlackLink(pr);
+    const prWithSameBranchAndLink = !slackLink && findPRsWithSameBranch(pr);
+    const unresolvedCount = getUnresolvedCommentsCount(pr);
+    
+    // Check if this PR is currently being updated
+    const isUpdating = updatingPRs[`${pr.repo}-${pr.number}`];
+    
+    return (
+      <tr key={`${pr.repo}-${pr.number}`} className={isUpdating ? 'pr-row-updating' : ''}>
+        <td className="pr-title-cell">
+          <span className="pr-repo-badge">{sanitizeText(pr.repo)}</span>
+          <span className="pr-number">#{pr.number}</span>
+          <a href={pr.html_url} 
+             target="_blank" 
+             rel="noopener noreferrer" 
+             className="pr-title-link"
+          >
+            {sanitizeText(pr.title)}
+          </a>
+          <div className="pr-branch">
+            <span className="branch-label">Branch:</span> {sanitizeText(pr.head.ref)}
+          </div>
+        </td>
+        <td>
+          <div className="pr-author">
+            {sanitizeText(pr.user.login)}
+          </div>
+        </td>
+        <td>
+          {formatDate(pr.created_at)}
+        </td>
+        <td className="review-status-cell">
+          <div className="review-badges">
+            {reviewStatus.pending.length > 0 && (
+              <span className="review-badge pending">
+                {reviewStatus.pending.length} pending
+              </span>
+            )}
+            {Object.entries(reviewStatus.states).map(([reviewer, state]) => (
+              <span 
+                key={reviewer} 
+                className={`review-badge ${state === 'APPROVED' ? 'approved' : state === 'CHANGES_REQUESTED' ? 'changes-requested' : ''}`}
+              >
+                {sanitizeText(reviewer)} {state === 'APPROVED' ? '✓' : state === 'CHANGES_REQUESTED' ? '×' : ''}
+              </span>
+            ))}
+          </div>
+          {reviewStatus.pending.length > 0 && (
+            <div className="pending-reviewers">
+              <span className="pending-label">Waiting on:</span>
+              {reviewStatus.pending.map((reviewer, index) => (
+                <span key={reviewer} className="pending-reviewer">
+                  {sanitizeText(reviewer)}{index < reviewStatus.pending.length - 1 ? ', ' : ''}
+                </span>
+              ))}
+            </div>
+          )}
+        </td>
+        <td className="unresolved-comments-cell">
+          {unresolvedCount > 0 ? (
+            <span className="unresolved-badge">{unresolvedCount}</span>
+          ) : (
+            <span className="resolved-badge">0</span>
+          )}
+        </td>
+        <td className="mergeable-cell">
+          {pr.mergeable === null ? (
+            <span className="mergeable-badge unknown">Checking...</span>
+          ) : pr.mergeable && pr.mergeable_state === 'clean' && !pr.mergeBlockReason ? (
+            <span className="mergeable-badge mergeable">Yes</span>
+          ) : (
+            <div className="mergeable-status">
+              <span className="mergeable-badge not-mergeable">No</span>
+              {(pr.mergeBlockReason || 
+                pr.mergeable_state !== 'clean') && (
+                <span className="mergeable-reason">
+                  {pr.mergeBlockReason ? sanitizeText(pr.mergeBlockReason) :
+                   pr.mergeable_state === 'behind' ? 'Branch out of date' : 
+                   pr.mergeable_state === 'dirty' ? 'Conflicts' : 
+                   pr.mergeable_state === 'blocked' ? 'Checks or reviews required' : 
+                   pr.mergeable_state === 'unstable' ? 'Tests failing' : 
+                   pr.mergeable_state === 'has_hooks' ? 'Waiting for hooks' :
+                   sanitizeText(pr.mergeable_state)}
+                </span>
+              )}
+            </div>
+          )}
+        </td>
+        <td className="slack-link-cell">
+          {isUpdating ? (
+            <div className="slack-link-loading">
+              <div className="row-spinner"></div>
+              <span>Updating PR...</span>
+            </div>
+          ) : (
+            <>
+              {slackLink ? (
+                <div className="slack-link-display">
+                  <a 
+                    href={slackLink} 
+                    target="_blank" 
+                    rel="noopener noreferrer"
+                    className="slack-link"
+                  >
+                    Slack
+                  </a>
+                  <button 
+                    onClick={() => openSlackLinkModal(pr, slackLink)} 
+                    className="edit-slack-link-button"
+                    title="Edit Slack link"
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                      <path d="M16.293 2.293a1 1 0 0 1 1.414 0l4 4a1 1 0 0 1 0 1.414l-13 13A1 1 0 0 1 8 21H4a1 1 0 0 1-1-1v-4a1 1 0 0 1 .293-.707l13-13z" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+                    </svg>
+                  </button>
+                </div>
+              ) : prWithSameBranchAndLink ? (
+                <div className="slack-link-display">
+                  <button 
+                    onClick={() => copySlackLinkFromSameBranch(pr, prWithSameBranchAndLink)} 
+                    className="copy-slack-link-button"
+                    title={`Copy link from PR #${prWithSameBranchAndLink.number}`}
+                  >
+                    Copy from #{prWithSameBranchAndLink.number}
+                  </button>
+                </div>
+              ) : (
+                <button 
+                  onClick={() => openSlackLinkModal(pr, '')} 
+                  className="add-slack-link-button"
+                >
+                  Add Link
+                </button>
+              )}
+            </>
+          )}
+        </td>
+        <td>
+          <div className="action-links">
+            <a href={pr.html_url} target="_blank" rel="noopener noreferrer" className="action-link github-link">
+              GitHub
+            </a>
+          </div>
+        </td>
+      </tr>
+    );
+  };
+
+  // Secure content wrapper component - only shows content if user is authenticated and in org
+  const SecureContent = ({ children }) => {
+    if (!isLoggedIn) {
+      return (
+        <div className="secure-content">
+          <div className="authenticate-warning">
+            <h3>Authentication Required</h3>
+            <p>Please log in with GitHub to view this content.</p>
+            <p>You must be a member of the {organization} organization.</p>
+          </div>
+          {renderLogin()}
+        </div>
+      );
+    }
+    
+    return children;
+  };
+
+  return (
+    <div className="App">
+      {renderHeader()}
+      
+      {!isLoggedIn ? (
+        renderLogin()
+      ) : (
+        <SecureContent>
+          <div className="main-content">
+            {renderSettingsPanel()}
+            {renderPRResults()}
+            <SlackLinkModal />
+          </div>
+        </SecureContent>
       )}
     </div>
   );

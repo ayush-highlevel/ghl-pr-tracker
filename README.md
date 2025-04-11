@@ -1,72 +1,114 @@
-# Getting Started with Create React App
+# GitHub PR Tracker
 
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
+A web application for tracking and managing GitHub pull requests for your team. This application allows you to see all open PRs for your organization/team, filter them by various criteria, and check their review status.
 
-## Available Scripts
+## Features
 
-In the project directory, you can run:
+- GitHub OAuth integration using Firebase Authentication
+- Track open pull requests across multiple repositories
+- Filter PRs by author, reviewer, and repository
+- View PR review status, mergeable state, and other details
+- Manage team members and repository selection
 
-### `npm start`
+## Setup
 
-Runs the app in the development mode.\
-Open [http://localhost:3000](http://localhost:3000) to view it in your browser.
+### Prerequisites
 
-The page will reload when you make changes.\
-You may also see any lint errors in the console.
+- Node.js (v14 or later)
+- NPM or Yarn
+- GitHub account with access to the repositories you want to track
+- Firebase account
 
-### `npm test`
+### 1. Firebase Setup
 
-Launches the test runner in the interactive watch mode.\
-See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
+1. Go to [Firebase Console](https://console.firebase.google.com/)
+2. Click "Add project" and follow the wizard to create a new project
+3. Once the project is created, click "Web" (</>) to add a web app
+4. Register the app with a nickname and click "Register app"
+5. Copy the Firebase configuration object for the next steps
 
-### `npm run build`
+### 2. Enable GitHub Authentication in Firebase
 
-Builds the app for production to the `build` folder.\
-It correctly bundles React in production mode and optimizes the build for the best performance.
+1. In Firebase Console, go to "Authentication" → "Sign-in method"
+2. Click on "GitHub" provider and enable it
+3. You'll need to set up a GitHub OAuth App:
+   - Go to GitHub → Settings → Developer settings → OAuth Apps → New OAuth App
+   - For the Authorization callback URL, use the one provided by Firebase 
+     (should look like `https://your-project.firebaseapp.com/__/auth/handler`)
+   - Copy the Client ID and Client Secret to Firebase
+   - Save both in GitHub and Firebase
 
-The build is minified and the filenames include the hashes.\
-Your app is ready to be deployed!
+### 3. Local Development Setup
 
-See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
+1. Clone the repository:
+   ```
+   git clone https://github.com/your-username/github-pr-tracker.git
+   cd github-pr-tracker
+   ```
 
-### `npm run eject`
+2. Install dependencies:
+   ```
+   npm install
+   ```
 
-**Note: this is a one-way operation. Once you `eject`, you can't go back!**
+3. Create a `.env` file in the root directory with your Firebase configuration:
+   ```
+   HL_GITHUB_APP_FIREBASE_API_KEY=your_api_key
+   HL_GITHUB_APP_FIREBASE_AUTH_DOMAIN=your_project.firebaseapp.com
+   HL_GITHUB_APP_FIREBASE_PROJECT_ID=your_project_id
+   HL_GITHUB_APP_FIREBASE_STORAGE_BUCKET=your_project.appspot.com
+   HL_GITHUB_APP_FIREBASE_MESSAGING_SENDER_ID=your_messaging_sender_id
+   HL_GITHUB_APP_FIREBASE_APP_ID=your_app_id
+   ```
 
-If you aren't satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
+4. Start the application:
+   ```
+   npm start
+   ```
 
-Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you're on your own.
+## Deployment to GitHub Pages
 
-You don't have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn't feel obligated to use this feature. However we understand that this tool wouldn't be useful if you couldn't customize it when you are ready for it.
+### Using GitHub Actions
 
-## Learn More
+1. In your GitHub repository, go to "Settings" > "Environments" > "New environment"
+2. Name it `github-pages`
+3. Add the following secrets (same as your Firebase configuration):
+   - `HL_GITHUB_APP_FIREBASE_API_KEY`
+   - `HL_GITHUB_APP_FIREBASE_AUTH_DOMAIN`
+   - `HL_GITHUB_APP_FIREBASE_PROJECT_ID`
+   - `HL_GITHUB_APP_FIREBASE_STORAGE_BUCKET`
+   - `HL_GITHUB_APP_FIREBASE_MESSAGING_SENDER_ID`
+   - `HL_GITHUB_APP_FIREBASE_APP_ID`
 
-You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
+4. Push your code to GitHub. The GitHub Actions workflow will automatically deploy your app to GitHub Pages with the correct environment variables.
 
-To learn React, check out the [React documentation](https://reactjs.org/).
+### Manual Deployment
 
-### Code Splitting
+1. Set environment variables in your shell:
+   ```
+   export HL_GITHUB_APP_FIREBASE_API_KEY=your_api_key
+   export HL_GITHUB_APP_FIREBASE_AUTH_DOMAIN=your_project.firebaseapp.com
+   # ... set all other Firebase variables
+   ```
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/code-splitting](https://facebook.github.io/create-react-app/docs/code-splitting)
+2. Run the deploy script:
+   ```
+   npm run deploy
+   ```
 
-### Analyzing the Bundle Size
+## Usage
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size](https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size)
+1. Navigate to the deployed application
+2. Click "Login with GitHub"
+3. Authorize the application to access your GitHub account
+4. Configure your team members (GitHub usernames)
+5. Select repositories to track
+6. View and filter pull requests
 
-### Making a Progressive Web App
+## License
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app](https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app)
+MIT
 
-### Advanced Configuration
+## Contact
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/advanced-configuration](https://facebook.github.io/create-react-app/docs/advanced-configuration)
-
-### Deployment
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/deployment](https://facebook.github.io/create-react-app/docs/deployment)
-
-### `npm run build` fails to minify
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify](https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify)
-# ghl-pr-tracker
-# ghl-pr-tracker
+For issues or feature requests, please contact the development team.
