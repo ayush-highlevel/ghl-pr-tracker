@@ -1,15 +1,15 @@
 {
   "files": {
-    "main.css": "/hl-github-pr-tracker/static/css/main.dfb290ed.css",
-    "main.js": "/hl-github-pr-tracker/static/js/main.9531844a.js",
+    "main.css": "/hl-github-pr-tracker/static/css/main.5a727da6.css",
+    "main.js": "/hl-github-pr-tracker/static/js/main.1abc9f2f.js",
     "static/js/488.ed6f650e.chunk.js": "/hl-github-pr-tracker/static/js/488.ed6f650e.chunk.js",
     "index.html": "/hl-github-pr-tracker/index.html",
-    "main.dfb290ed.css.map": "/hl-github-pr-tracker/static/css/main.dfb290ed.css.map",
-    "main.9531844a.js.map": "/hl-github-pr-tracker/static/js/main.9531844a.js.map",
+    "main.5a727da6.css.map": "/hl-github-pr-tracker/static/css/main.5a727da6.css.map",
+    "main.1abc9f2f.js.map": "/hl-github-pr-tracker/static/js/main.1abc9f2f.js.map",
     "488.ed6f650e.chunk.js.map": "/hl-github-pr-tracker/static/js/488.ed6f650e.chunk.js.map"
   },
   "entrypoints": [
-    "static/css/main.dfb290ed.css",
-    "static/js/main.9531844a.js"
+    "static/css/main.5a727da6.css",
+    "static/js/main.1abc9f2f.js"
   ]
 }
