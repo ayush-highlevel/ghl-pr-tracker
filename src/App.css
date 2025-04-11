@@ -1,29 +1,33 @@
 /* App.css */
 .App {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
-  max-width: 1200px;
-  margin: 0 auto;
-  padding: 20px;
+  max-width: 100%;
+  width: 100%;
+  margin: 0;
+  padding: 0;
   background-color: #f6f8fa;
   min-height: 100vh;
+  display: flex;
+  flex-direction: column;
 }
 
 .App-header {
-  margin-bottom: 20px;
+  margin-bottom: 0;
   border-bottom: 1px solid #e1e4e8;
-  padding-bottom: 20px;
+  padding: 16px 24px;
   display: flex;
   justify-content: space-between;
   align-items: center;
   background-color: white;
-  border-radius: 8px;
-  padding: 20px;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  position: sticky;
+  top: 0;
+  z-index: 100;
 }
 
 .App-header h1 {
   color: #24292e;
-  font-size: 28px;
+  font-size: 24px;
   margin: 0;
   background: linear-gradient(90deg, #2188ff, #6f42c1);
   -webkit-background-clip: text;
@@ -84,15 +88,14 @@
 .main-content {
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  flex: 1;
+  padding: 0;
 }
 
 .settings-panel {
   background-color: white;
-  border: 1px solid #e1e4e8;
-  border-radius: 8px;
-  padding: 15px;
-  margin-bottom: 20px;
+  border-bottom: 1px solid #e1e4e8;
+  padding: 15px 24px;
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
   transition: all 0.3s ease;
 }
@@ -577,10 +580,7 @@
   align-items: center;
   justify-content: center;
   padding: 40px;
-  background-color: white;
-  border: 1px solid #e1e4e8;
-  border-radius: 8px;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+  flex: 1;
 }
 
 .loading-spinner {
@@ -598,295 +598,257 @@
   100% { transform: rotate(360deg); }
 }
 
+/* PR Table Styles */
 .pr-results {
-  background-color: white;
-  border: 1px solid #e1e4e8;
-  border-radius: 8px;
-  padding: 20px;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+  flex: 1;
+  padding: 20px 24px;
+  display: flex;
+  flex-direction: column;
 }
 
 .pr-results h2 {
   margin-top: 0;
   font-size: 20px;
   color: #24292e;
-  margin-bottom: 25px;
-  border-bottom: 1px solid #f0f0f0;
-  padding-bottom: 15px;
+  margin-bottom: 20px;
 }
 
-.pr-cards {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
-  gap: 20px;
-}
-
-.pr-card {
-  border: 1px solid #e1e4e8;
-  border-radius: 8px;
-  padding: 20px;
+.pr-table-container {
+  overflow-x: auto;
   background-color: white;
-  box-shadow: 0 3px 6px rgba(0, 0, 0, 0.05);
-  display: flex;
-  flex-direction: column;
-  transition: transform 0.2s, box-shadow 0.2s;
+  border-radius: 8px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
 }
 
-.pr-card:hover {
-  transform: translateY(-3px);
-  box-shadow: 0 6px 12px rgba(0, 0, 0, 0.1);
-}
-
-.pr-card-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 12px;
-}
-
-.pr-repo {
+.pr-table {
+  width: 100%;
+  border-collapse: collapse;
   font-size: 14px;
-  color: #6a737d;
+}
+
+.pr-table th {
+  background-color: #f6f8fa;
+  text-align: left;
+  padding: 16px;
   font-weight: 600;
-  background-color: #f6f8fa;
-  padding: 3px 8px;
-  border-radius: 6px;
-}
-
-.pr-link {
-  color: #6a737d;
-  font-size: 14px;
-  text-decoration: none;
-  padding: 3px 8px;
-  border-radius: 6px;
-  background-color: #f6f8fa;
-  transition: background-color 0.2s;
-}
-
-.pr-link:hover {
-  background-color: #e1e4e8;
-}
-
-.pr-title {
-  margin: 0 0 15px 0;
-  font-size: 16px;
-  line-height: 1.4;
-}
-
-.pr-title a {
   color: #24292e;
-  text-decoration: none;
-  transition: color 0.2s;
+  border-bottom: 1px solid #e1e4e8;
+  position: sticky;
+  top: 0;
 }
 
-.pr-title a:hover {
+.pr-table td {
+  padding: 12px 16px;
+  border-bottom: 1px solid #e1e4e8;
+  vertical-align: middle;
+}
+
+.pr-table tr:hover {
+  background-color: #f6f8fa;
+}
+
+.pr-table tr:last-child td {
+  border-bottom: none;
+}
+
+.pr-title-cell {
+  min-width: 250px;
+  max-width: 400px;
+}
+
+.pr-title-link {
   color: #0366d6;
+  text-decoration: none;
+  font-weight: 500;
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.pr-meta {
-  display: flex;
-  justify-content: space-between;
-  margin-bottom: 16px;
-  font-size: 14px;
-  color: #586069;
-  background-color: #f6f8fa;
-  padding: 10px;
-  border-radius: 6px;
+.pr-title-link:hover {
+  text-decoration: underline;
 }
 
-.meta-label {
-  font-weight: 600;
-  color: #24292e;
-  margin-right: 5px;
-}
-
-.pr-reviews {
-  background-color: #f6f8fa;
-  border: 1px solid #e1e4e8;
-  border-radius: 6px;
-  padding: 15px;
-  margin-bottom: 16px;
-}
-
-.review-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 12px;
-}
-
-.review-header h4 {
-  margin: 0;
-  font-size: 14px;
-  color: #24292e;
-}
-
-.pending-count {
+.pr-branch {
+  margin-top: 4px;
   font-size: 12px;
-  font-weight: 600;
-  color: #6a737d;
+  color: #586069;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.branch-label {
+  color: #24292e;
+  font-weight: 500;
+}
+
+.pr-repo-badge {
+  display: inline-block;
+  background-color: #f1f8ff;
+  color: #0366d6;
+  font-size: 12px;
+  font-weight: 500;
   padding: 2px 8px;
-  border-radius: 10px;
-  background-color: #f0f0f0;
+  border-radius: 12px;
+  margin-right: 8px;
+  border: 1px solid #c8e1ff;
 }
 
-.pending-count.has-pending {
-  color: white;
-  background-color: #f97583;
+.pr-number {
+  color: #6a737d;
+  font-size: 12px;
 }
 
-.reviewers-list {
+.pr-author {
+  font-weight: 500;
   display: flex;
-  flex-direction: column;
+  align-items: center;
   gap: 8px;
 }
 
-.reviewer-item {
+.review-status-cell {
+  min-width: 150px;
+}
+
+.review-badges {
   display: flex;
-  justify-content: space-between;
-  padding: 8px 12px;
-  border-radius: 6px;
-  font-size: 13px;
-  background-color: white;
-  border: 1px solid #e1e4e8;
-  transition: transform 0.1s, box-shadow 0.1s;
+  flex-wrap: wrap;
+  gap: 4px;
 }
 
-.reviewer-item:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+.review-badge {
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 500;
 }
 
-.reviewer-item.reviewed {
-  background-color: #f0fff4;
-  border-color: #34d058;
+.review-badge.pending {
+  background-color: #fff5cc;
+  color: #b08800;
+  border: 1px solid #ffe066;
 }
 
-.reviewer-item.reviewed.changes_requested {
-  background-color: #fff5f5;
-  border-color: #f97583;
+.review-badge.approved {
+  background-color: #e6ffec;
+  color: #22863a;
+  border: 1px solid #bef5cb;
 }
 
-.reviewer-item.pending {
-  background-color: #fffbdd;
-  border-color: #f9c513;
+.review-badge.changes-requested {
+  background-color: #ffeef0;
+  color: #cb2431;
+  border: 1px solid #ffdce0;
 }
 
-.reviewer-name {
-  font-weight: 600;
-}
-
-.review-status {
+.pending-reviewers {
+  margin-top: 8px;
+  font-size: 12px;
   color: #586069;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
 }
 
-.no-reviewers {
-  color: #6a737d;
+.pending-label {
+  font-weight: 600;
+  color: #b08800;
+  margin-right: 4px;
+}
+
+.pending-reviewer {
   font-style: italic;
-  text-align: center;
-  padding: 10px;
 }
 
-/* Slack messages styling */
-.slack-messages {
-  background-color: #f6f8fa;
-  border: 1px solid #e1e4e8;
-  border-radius: 6px;
-  padding: 15px;
-  margin-bottom: 16px;
+.mergeable-cell {
+  min-width: 120px;
 }
 
-.slack-messages h4 {
-  margin: 0 0 12px 0;
-  font-size: 14px;
-  color: #24292e;
-  display: flex;
+.mergeable-badge {
+  display: inline-flex;
+  flex-direction: column;
   align-items: center;
-  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 500;
 }
 
-.slack-icon {
+.mergeable-status {
   display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.mergeable-badge.mergeable {
+  background-color: #e6ffec;
+  color: #22863a;
+  border: 1px solid #bef5cb;
+}
+
+.mergeable-badge.not-mergeable {
+  background-color: #ffeef0;
+  color: #cb2431;
+  border: 1px solid #ffdce0;
+}
+
+.mergeable-badge.unknown {
+  background-color: #f6f8fa;
+  color: #6a737d;
+  border: 1px solid #d1d5da;
+}
+
+.mergeable-reason {
+  font-size: 11px;
+  padding: 2px 8px;
+  font-style: italic;
+  white-space: nowrap;
+  background-color: #f6f8fa;
+  border: 1px solid #d1d5da;
+  border-radius: 10px;
+  color: #24292e;
+}
+
+.action-links {
+  display: flex;
+  gap: 8px;
+}
+
+.action-link {
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-}
-
-.slack-messages-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.slack-message-item {
-  display: flex;
-  flex-direction: column;
-  background-color: white;
-  border: 1px solid #e1e4e8;
-  border-left: 3px solid #4A154B;
-  border-radius: 6px;
-  padding: 12px;
-  text-decoration: none;
-  transition: transform 0.1s, box-shadow 0.1s;
-}
-
-.slack-message-item:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
-}
-
-.slack-message-preview {
-  color: #24292e;
-  font-size: 13px;
-  line-height: 1.4;
-  margin-bottom: 8px;
-}
-
-.slack-message-link {
-  color: #4A154B;
-  font-size: 12px;
-  font-weight: 600;
-  align-self: flex-end;
-}
-
-.pr-actions {
-  margin-top: auto;
-  padding-top: 15px;
-}
-
-.view-button {
-  display: block;
-  width: 100%;
-  background-color: #2188ff;
+  padding: 4px 8px;
   color: white;
-  border: none;
-  border-radius: 6px;
-  padding: 10px 0;
-  text-align: center;
-  font-size: 14px;
-  cursor: pointer;
+  font-size: 12px;
+  border-radius: 4px;
   text-decoration: none;
-  transition: background-color 0.2s, transform 0.1s;
-  font-weight: 500;
-  box-shadow: 0 2px 4px rgba(33, 136, 255, 0.2);
+  transition: opacity 0.2s;
 }
 
-.view-button:hover {
-  background-color: #0366d6;
-  transform: translateY(-1px);
+.action-link:hover {
+  opacity: 0.9;
 }
 
-.view-button:active {
-  transform: translateY(1px);
+.github-link {
+  background-color: #24292e;
+}
+
+.slack-link {
+  background-color: #4A154B;
 }
 
 .no-results {
   text-align: center;
   padding: 40px;
   background-color: white;
-  border: 1px solid #e1e4e8;
   border-radius: 8px;
   color: #586069;
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+  margin: 20px 0;
 }
 
 .no-results h3 {
@@ -895,13 +857,13 @@
 }
 
 /* Responsive Design */
-@media (max-width: 992px) {
-  .settings-layout {
-    flex-direction: column;
+@media (max-width: 1200px) {
+  .App-header {
+    padding: 12px 16px;
   }
   
-  .pr-cards {
-    grid-template-columns: 1fr;
+  .pr-results {
+    padding: 16px;
   }
 }
 

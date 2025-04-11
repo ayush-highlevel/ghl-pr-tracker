@@ -9,7 +9,8 @@ const DEFAULT_TEAM_MEMBERS = ['ajayreddy611', 'ayush-highlevel', 'nihalmaddela12
 const DEFAULT_REPOS = ['leadgen-marketplace-backend', 'ghl-content-ai', 'spm-ts', 'platform-backend'];
 
 function App() {
-  const [githubToken, setGithubToken] = useState(localStorage.getItem('github_token') || '');
+  const envGithubToken = process.env.PR_TRACKER_GITHUB_TOKEN || '';
+  const [githubToken, setGithubToken] = useState(localStorage.getItem('github_token') || envGithubToken);
   const [slackToken, setSlackToken] = useState(localStorage.getItem('slack_token') || '');
   const [slackChannel, setSlackChannel] = useState(localStorage.getItem('slack_channel') || '');
   const [organization] = useState(DEFAULT_ORGANIZATION);
@@ -27,11 +28,11 @@ function App() {
   );
   const [error, setError] = useState('');
   const [slackError, setSlackError] = useState('');
-  const [showInitialSetup, setShowInitialSetup] = useState(!localStorage.getItem('github_token'));
+  const [showInitialSetup, setShowInitialSetup] = useState(!localStorage.getItem('github_token') && !envGithubToken);
   const [searchTerm, setSearchTerm] = useState('');
   const [page, setPage] = useState(1);
   const [hasNextPage, setHasNextPage] = useState(false);
-  const [statusFilter, setStatusFilter] = useState('needs-review');
+  const [statusFilter, setStatusFilter] = useState('all');
   const [authorFilter, setAuthorFilter] = useState('all');
   const [reviewerFilter, setReviewerFilter] = useState('all');
   const [repoFilter, setRepoFilter] = useState('all');
@@ -135,7 +136,7 @@ function App() {
           return isAuthor || isReviewer;
         });
         
-        // Get PR reviews for each team PR
+        // Get PR reviews and mergeable status for each team PR
         for (const pr of teamPRs) {
           const reviews = await octokit.pulls.listReviews({
             owner: organization,
@@ -143,13 +144,56 @@ function App() {
             pull_number: pr.number
           });
           
+          // Get detailed PR info to get mergeable status
+          const prDetail = await octokit.pulls.get({
+            owner: organization,
+            repo: repo,
+            pull_number: pr.number
+          });
+          
+          // Get branch protection rules for accurate mergeable info
+          let mergeBlockReason = null;
+          try {
+            // Try to get repo branch protection info if available
+            const branchProtection = await octokit.repos.getBranchProtection({
+              owner: organization,
+              repo: repo,
+              branch: prDetail.data.base.ref
+            });
+            
+            // Check if required reviews are satisfied
+            if (branchProtection.data.required_pull_request_reviews) {
+              const requiredCount = branchProtection.data.required_pull_request_reviews.required_approving_review_count || 0;
+              const approvalCount = reviews.data.filter(r => r.state === 'APPROVED').length;
+              
+              if (approvalCount < requiredCount) {
+                mergeBlockReason = `Needs ${requiredCount - approvalCount} more ${requiredCount - approvalCount === 1 ? 'approval' : 'approvals'}`;
+              }
+            }
+          } catch (err) {
+            // Branch protection might not be available or accessible
+            // Just continue without this data
+            console.log(`Branch protection not available for ${repo}/${prDetail.data.base.ref}`);
+          }
+          
+          // Check if PR has requests for review but no approvals yet
+          const hasRequestedReviewers = pr.requested_reviewers && pr.requested_reviewers.length > 0;
+          const approvalCount = reviews.data.filter(r => r.state === 'APPROVED').length;
+          
+          if (hasRequestedReviewers && approvalCount === 0 && !mergeBlockReason) {
+            mergeBlockReason = 'Waiting for reviews';
+          }
+          
           allPRs.push({
             ...pr,
             repo,
             reviews: reviews.data,
             teamMember: teamMembers.find(member => member === pr.user.login),
             reviewers: pr.requested_reviewers || [],
-            slackMessages: [] // Initialize with empty array
+            slackMessages: [], // Initialize with empty array
+            mergeable: prDetail.data.mergeable,
+            mergeable_state: prDetail.data.mergeable_state,
+            mergeBlockReason
           });
         }
       }
@@ -296,7 +340,8 @@ function App() {
     return {
       reviewed: Object.keys(completedReviews),
       pending: reviewerLogins.filter(login => !completedReviews[login]),
-      states: completedReviews
+      states: completedReviews,
+      hasReviews: pr.reviews.length > 0
     };
   };
   
@@ -322,12 +367,6 @@ function App() {
   
   // Filter PRs based on selected filters
   const filteredPRs = pullRequests.filter(pr => {
-    // Filter by status
-    if (statusFilter === 'needs-review') {
-      const status = getReviewStatus(pr);
-      if (status.pending.length === 0) return false;
-    }
-    
     // Filter by author
     if (authorFilter !== 'all' && pr.user.login !== authorFilter) {
       return false;
@@ -353,15 +392,6 @@ function App() {
         <h1>GoHighLevel PR Tracker</h1>
         {!showInitialSetup && (
           <div className="header-actions">
-            <select 
-              value={statusFilter} 
-              onChange={(e) => setStatusFilter(e.target.value)}
-              className="filter-select"
-            >
-              <option value="needs-review">Needs Review</option>
-              <option value="all">All Open PRs</option>
-            </select>
-            
             <select 
               value={authorFilter} 
               onChange={(e) => setAuthorFilter(e.target.value)}
@@ -660,105 +690,113 @@ function App() {
           ) : filteredPRs.length > 0 ? (
             <div className="pr-results">
               <h2>Open Pull Requests {filteredPRs.length > 0 && `(${filteredPRs.length})`}</h2>
-              <div className="pr-cards">
-                {filteredPRs.map(pr => {
-                  const reviewStatus = getReviewStatus(pr);
-                  return (
-                    <div key={`${pr.repo}-${pr.number}`} className="pr-card">
-                      <div className="pr-card-header">
-                        <div className="pr-repo">{pr.repo}</div>
-                        <a href={pr.html_url} target="_blank" rel="noopener noreferrer" className="pr-link">
-                          #{pr.number}
-                        </a>
-                      </div>
-                      <h3 className="pr-title">
-                        <a href={pr.html_url} target="_blank" rel="noopener noreferrer">
-                          {pr.title}
-                        </a>
-                      </h3>
-                      <div className="pr-meta">
-                        <div className="pr-author">
-                          <span className="meta-label">Author:</span> {pr.user.login}
-                        </div>
-                        <div className="pr-date">
-                          <span className="meta-label">Created:</span> {formatDate(pr.created_at)}
-                        </div>
-                      </div>
-                      <div className="pr-reviews">
-                        <div className="review-header">
-                          <h4>Review Status</h4>
-                          <span className={`pending-count ${reviewStatus.pending.length > 0 ? 'has-pending' : ''}`}>
-                            {reviewStatus.pending.length} pending
-                          </span>
-                        </div>
-                        
-                        {pr.reviewers.length > 0 ? (
-                          <div className="reviewers-list">
-                            {pr.reviewers.map(reviewer => {
-                              const hasReviewed = reviewStatus.reviewed.includes(reviewer.login);
-                              const reviewState = reviewStatus.states[reviewer.login];
-                              
-                              return (
-                                <div 
-                                  key={reviewer.login} 
-                                  className={`reviewer-item ${hasReviewed ? 'reviewed' : 'pending'} ${reviewState?.toLowerCase() || ''}`}
+              <div className="pr-table-container">
+                <table className="pr-table">
+                  <thead>
+                    <tr>
+                      <th>Title</th>
+                      <th>Author</th>
+                      <th>Created</th>
+                      <th>Review Status</th>
+                      <th>Mergeable</th>
+                      <th>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredPRs.map(pr => {
+                      const reviewStatus = getReviewStatus(pr);
+                      return (
+                        <tr key={`${pr.repo}-${pr.number}`}>
+                          <td className="pr-title-cell">
+                            <span className="pr-repo-badge">{pr.repo}</span>
+                            <span className="pr-number">#{pr.number}</span>
+                            <a href={pr.html_url} target="_blank" rel="noopener noreferrer" className="pr-title-link">
+                              {pr.title}
+                            </a>
+                            <div className="pr-branch">
+                              <span className="branch-label">Branch:</span> {pr.head.ref}
+                            </div>
+                          </td>
+                          <td>
+                            <div className="pr-author">
+                              {pr.user.login}
+                            </div>
+                          </td>
+                          <td>
+                            {formatDate(pr.created_at)}
+                          </td>
+                          <td className="review-status-cell">
+                            <div className="review-badges">
+                              {reviewStatus.pending.length > 0 && (
+                                <span className="review-badge pending">
+                                  {reviewStatus.pending.length} pending
+                                </span>
+                              )}
+                              {Object.entries(reviewStatus.states).map(([reviewer, state]) => (
+                                <span 
+                                  key={reviewer} 
+                                  className={`review-badge ${state === 'APPROVED' ? 'approved' : state === 'CHANGES_REQUESTED' ? 'changes-requested' : ''}`}
                                 >
-                                  <span className="reviewer-name">{reviewer.login}</span>
-                                  <span className="review-status">
-                                    {hasReviewed ? 
-                                      (reviewState === 'APPROVED' ? '✓ Approved' : 
-                                       reviewState === 'CHANGES_REQUESTED' ? '× Changes Requested' : 
-                                       'Reviewed') : 
-                                      'Pending'}
+                                  {reviewer} {state === 'APPROVED' ? '✓' : state === 'CHANGES_REQUESTED' ? '×' : ''}
+                                </span>
+                              ))}
+                            </div>
+                            {reviewStatus.pending.length > 0 && (
+                              <div className="pending-reviewers">
+                                <span className="pending-label">Waiting on:</span>
+                                {reviewStatus.pending.map((reviewer, index) => (
+                                  <span key={reviewer} className="pending-reviewer">
+                                    {reviewer}{index < reviewStatus.pending.length - 1 ? ', ' : ''}
                                   </span>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        ) : (
-                          <div className="no-reviewers">No reviewers assigned</div>
-                        )}
-                      </div>
-                      
-                      {pr.slackMessages && pr.slackMessages.length > 0 && (
-                        <div className="slack-messages">
-                          <h4>
-                            <span className="slack-icon">
-                              <svg viewBox="0 0 24 24" width="16" height="16" fill="#2EB67D">
-                                <path d="M5.042 19.205A2.5 2.5 0 017.5 17.75h9a2.5 2.5 0 012.458 2.046M3.042 16.205A2.5 2.5 0 015.5 14.75h13a2.5 2.5 0 012.458 2.046M18.75 4.778a2.53 2.53 0 00-4.806-1.056A2.53 2.53 0 009.138 4.5a2.53 2.53 0 00-4.806-1.056A2.53 2.53 0 00.125 4.5v5.025a2.53 2.53 0 001.25 4.806.97.97 0 01.934 1.062A2.53 2.53 0 007.5 16.15a2.53 2.53 0 004.068.748 2.53 2.53 0 004.806-1.056 2.53 2.53 0 004.806-1.056 2.53 2.53 0 000-4.806.969.969 0 01-.934-1.062 2.53 2.53 0 00-1.556-4.14z"/>
-                              </svg>
-                            </span>
-                            Slack Discussions
-                          </h4>
-                          <div className="slack-messages-list">
-                            {pr.slackMessages.map((msg, index) => (
-                              <a 
-                                key={index} 
-                                href={msg.permalink} 
-                                target="_blank" 
-                                rel="noopener noreferrer"
-                                className="slack-message-item"
-                              >
-                                <div className="slack-message-preview">
-                                  {msg.text.length > 100 ? `${msg.text.substring(0, 100)}...` : msg.text}
-                                </div>
-                                <div className="slack-message-link">
-                                  Open in Slack →
-                                </div>
+                                ))}
+                              </div>
+                            )}
+                          </td>
+                          <td className="mergeable-cell">
+                            {pr.mergeable === null ? (
+                              <span className="mergeable-badge unknown">Checking...</span>
+                            ) : pr.mergeable && pr.mergeable_state === 'clean' && !pr.mergeBlockReason ? (
+                              <span className="mergeable-badge mergeable">Yes</span>
+                            ) : (
+                              <div className="mergeable-status">
+                                <span className="mergeable-badge not-mergeable">No</span>
+                                {(pr.mergeBlockReason || 
+                                  pr.mergeable_state !== 'clean') && (
+                                  <span className="mergeable-reason">
+                                    {pr.mergeBlockReason ? pr.mergeBlockReason :
+                                     pr.mergeable_state === 'behind' ? 'Branch out of date' : 
+                                     pr.mergeable_state === 'dirty' ? 'Conflicts' : 
+                                     pr.mergeable_state === 'blocked' ? 'Checks or reviews required' : 
+                                     pr.mergeable_state === 'unstable' ? 'Tests failing' : 
+                                     pr.mergeable_state === 'has_hooks' ? 'Waiting for hooks' :
+                                     pr.mergeable_state}
+                                  </span>
+                                )}
+                              </div>
+                            )}
+                          </td>
+                          <td>
+                            <div className="action-links">
+                              <a href={pr.html_url} target="_blank" rel="noopener noreferrer" className="action-link github-link">
+                                GitHub
                               </a>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                      
-                      <div className="pr-actions">
-                        <a href={pr.html_url} target="_blank" rel="noopener noreferrer" className="view-button">
-                          View on GitHub
-                        </a>
-                      </div>
-                    </div>
-                  );
-                })}
+                              {pr.slackMessages && pr.slackMessages.length > 0 && (
+                                <a 
+                                  href={pr.slackMessages[0].permalink} 
+                                  target="_blank" 
+                                  rel="noopener noreferrer"
+                                  className="action-link slack-link"
+                                >
+                                  Slack
+                                </a>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
               </div>
             </div>
           ) : pullRequests.length > 0 ? (
