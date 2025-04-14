@@ -1,0 +1,9 @@
+{
+  "name": "github-pr-tracker-functions",
+  "version": "1.0.0",
+  "description": "Netlify Functions for GitHub PR Tracker",
+  "main": "index.js",
+  "dependencies": {
+    "@octokit/rest": "^19.0.7"
+  }
+} 

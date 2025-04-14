@@ -1,18 +1,21 @@
 // App.js - Improved organization
 import React, { useState, useEffect, useRef, useCallback, memo } from 'react';
 import './App.css';
-import { Octokit } from '@octokit/rest';
+// Use our secure Octokit alternative
+import { createSecureOctokit } from './utils/githubApi';
 // Import Firebase modules
 import { initializeApp } from 'firebase/app';
 import { getAuth, GithubAuthProvider, signInWithPopup, onAuthStateChanged, signOut } from 'firebase/auth';
+// Import Octokit for the auth check
+import { Octokit } from '@octokit/rest';
 
 // Preset values
 const DEFAULT_ORGANIZATION = 'GoHighLevel';
 const DEFAULT_TEAM_MEMBERS = ['ajayreddy611', 'ayush-highlevel', 'nihalmaddela12', 'hammad-ghl'];
 const DEFAULT_REPOS = ['leadgen-marketplace-backend', 'ghl-content-ai', 'spm-ts', 'platform-backend'];
 
-// Optional Personal Access Token for API calls (if organization has OAuth restrictions)
-const GITHUB_TOKEN = process.env.REACT_APP_PR_TRACKER_GITHUB_TOKEN || '';
+// Remove direct token access
+// const GITHUB_TOKEN = process.env.REACT_APP_PR_TRACKER_GITHUB_TOKEN || '';
 
 // Firebase configuration
 const firebaseConfig = {
@@ -194,7 +197,6 @@ function App() {
   // Check if user is a member of the organization - with enhanced security
   const checkOrgMembership = async (token, username) => {
     if (!token || !username || !organization) {
-      console.error('Missing required parameters for org membership check');
       return false;
     }
     
@@ -214,16 +216,11 @@ function App() {
           return true;
         }
       } catch (reposError) {
-        console.log('Org repos check error:', reposError.message);
         // Continue to other checks
       }
       
-      // If we've reached here, we couldn't confirm membership
-      console.warn(`Could not confirm membership in ${organization} for ${username}`);
-      
       return false;
     } catch (error) {
-      console.error('Organization membership check error:', error);
       setError(`There was a problem verifying your access to the ${organization} organization.`);
       return false;
     }
@@ -284,14 +281,12 @@ function App() {
         // Successfully authenticated and validated membership
         fetchRepositories(1);
       } catch (error) {
-        console.error('Sign in error:', error);
         setError(`Failed to sign in with GitHub: ${error.message}`);
       }
       
       setLoading(false);
     } catch (error) {
       setLoading(false);
-      console.error('Sign in flow error:', error);
       setError(`Failed to start sign in flow: ${error.message}`);
     }
   };
@@ -352,8 +347,8 @@ function App() {
   // Update the PR description with the Slack link
   const updatePRDescription = async (pr, slackLink) => {
     try {
-      if (!isLoggedIn && !GITHUB_TOKEN) {
-        setError('User not logged in and no GitHub token available');
+      if (!isLoggedIn) {
+        setError('User not logged in');
         return;
       }
       
@@ -364,19 +359,8 @@ function App() {
         [prKey]: true
       }));
       
-      // Try to use PAT first (for organizations with OAuth restrictions)
-      let token = GITHUB_TOKEN;
-      
-      // If no PAT, fall back to OAuth token
-      if (!token && isLoggedIn) {
-        token = userData?.githubToken || localStorage.getItem('github_access_token');
-      }
-      
-      if (!token) {
-        throw new Error('GitHub token not available. Please sign in again or configure a personal access token.');
-      }
-      
-      const octokit = new Octokit({ auth: token });
+      // Use our secure Octokit alternative
+      const octokit = createSecureOctokit();
       
       // Get current PR details to make sure we have the latest body
       const { data: currentPR } = await octokit.pulls.get({
@@ -416,7 +400,7 @@ function App() {
         delete updated[prKey];
         return updated;
       });
-    } catch (err) {
+    } catch (error) {
       // Mark this PR as no longer updating
       setUpdatingPRs(prev => {
         const updated = { ...prev };
@@ -424,8 +408,8 @@ function App() {
         return updated;
       });
       
-      console.error('Failed to update PR description:', err);
-      setError(`Failed to update PR description: ${err.message}`);
+      console.error('Failed to update PR description:', error);
+      setError(`Failed to update PR description: ${error.message}`);
     }
   };
   
@@ -483,7 +467,8 @@ function App() {
           return matches[1];
         }
       } catch (e) {
-        console.error('Invalid Slack URL:', e);
+        // Invalid URL
+        return null;
       }
     }
     return null;
@@ -491,18 +476,29 @@ function App() {
   
   // Find PRs with same branch and check if any have a Slack link
   const findPRsWithSameBranch = (pr) => {
+    // Basic validation only
+    if (!pr) {
+      return null;
+    }
+    
+    // Repair missing properties
+    if (!pr.head) pr.head = { ref: 'unknown-branch' };
+    if (!pr.id) pr.id = 0;
+    
     const branch = pr.head.ref;
     const prsWithSameBranch = pullRequests.filter(
-      otherPr => otherPr.head.ref === branch && otherPr.id !== pr.id
+      otherPr => otherPr && otherPr.head && otherPr.head.ref === branch && otherPr.id !== pr.id
     );
     
     return prsWithSameBranch.find(otherPr => 
-      extractSlackLink(otherPr.body) || customSlackLinks[`${otherPr.repo}-${otherPr.number}`]
+      (otherPr && (extractSlackLink(otherPr.body) || customSlackLinks[`${otherPr.repo}-${otherPr.number}`]))
     );
   };
   
   // Get the Slack link for a PR
   const getSlackLink = (pr) => {
+    if (!pr || !pr.repo || !pr.number) return null;
+    
     const customLink = customSlackLinks[`${pr.repo}-${pr.number}`];
     if (customLink) return customLink;
     return extractSlackLink(pr.body);
@@ -524,27 +520,14 @@ function App() {
   
   // Function to fetch repositories with pagination
   const fetchRepositories = async (pageNum) => {
-    if (!isLoggedIn && !GITHUB_TOKEN) return;
+    if (!isLoggedIn) return;
     
     setRepoLoading(true);
     setError('');
     
     try {
-      // Try to use PAT first (for organizations with OAuth restrictions)
-      let token = GITHUB_TOKEN;
-      
-      // If no PAT, fall back to OAuth token
-      if (!token && isLoggedIn) {
-        token = userData?.githubToken || localStorage.getItem('github_access_token');
-      }
-      
-      if (!token) {
-        setRepositories(DEFAULT_REPOS);
-        setRepoLoading(false);
-        return;
-      }
-      
-      const octokit = new Octokit({ auth: token });
+      // Use our secure Octokit alternative
+      const octokit = createSecureOctokit();
       
       try {
         const response = await octokit.repos.listForOrg({
@@ -585,7 +568,7 @@ function App() {
 
   // Function to fetch PRs with filtering - optimized with parallel requests only
   const fetchPullRequests = async () => {
-    if ((!isLoggedIn && !GITHUB_TOKEN) || selectedRepos.length === 0) {
+    if (!isLoggedIn || selectedRepos.length === 0) {
       setError('Please log in and select at least one repository.');
       return;
     }
@@ -596,49 +579,58 @@ function App() {
     setLoadingProgress({ total: selectedRepos.length * 2, completed: 0, stage: 'Fetching pull requests' });
     
     try {
-      // Try to use PAT first (for organizations with OAuth restrictions)
-      let token = GITHUB_TOKEN;
-      
-      // If no PAT, fall back to OAuth token
-      if (!token && isLoggedIn) {
-        token = userData?.githubToken || localStorage.getItem('github_access_token');
-      }
-      
-      if (!token) {
-        throw new Error('GitHub token not available. Please sign in again or configure a personal access token.');
-      }
-      
-      const octokit = new Octokit({ auth: token });
+      // Use our secure Octokit alternative
+      const octokit = createSecureOctokit();
       
       // Step 1: Fetch all PRs from all repos in parallel
-      const prFetchPromises = selectedRepos.map((repo, index) => 
-        octokit.pulls.list({
+      const prFetchPromises = selectedRepos.map((repo, index) => {
+        return octokit.pulls.list({
           owner: organization,
           repo: repo,
           state: 'open',
           per_page: 100
-        }).then(response => {
+        })
+        .then(response => {
           setLoadingProgress(prev => ({ 
             ...prev, 
             completed: prev.completed + 1,
             stage: `Fetched PRs from ${index + 1}/${selectedRepos.length} repos`
           }));
+          // Ensure the response has a data property
+          if (!response.data) {
+            return [];
+          }
           return response.data.map(pr => ({
             ...pr,
             repo
           }));
         })
-      );
-      
+        .catch(error => {
+          setError(prev => `${prev ? prev + '\n' : ''}Error fetching PRs for ${repo}: ${error.message}`);
+          // Return empty array to keep the promise chain working
+          return [];
+        });
+      });
+
       // Wait for all PR fetch operations to complete
       const prArrays = await Promise.all(prFetchPromises);
-      
+
       // Flatten the array of arrays into a single array
       const allPRsRaw = prArrays.flat();
-      
+
       // Filter PRs by team members
       const teamPRs = allPRsRaw.filter(pr => {
-        const isAuthor = teamMembers.includes(pr.user.login);
+        // Handle missing data by logging it but not skipping
+        if (!pr) {
+          return false;
+        }
+        
+        // If user data is missing, try to keep the PR but fix it
+        if (!pr.user) {
+          pr.user = { login: 'unknown' }; // Add placeholder user
+        }
+
+        const isAuthor = pr.user && teamMembers.includes(pr.user.login);
         const isReviewer = pr.requested_reviewers && 
           pr.requested_reviewers.some(reviewer => teamMembers.includes(reviewer.login));
         
@@ -660,10 +652,30 @@ function App() {
       
       // Step 2: Batch fetch PR reviews and details in parallel
       const prDetailsPromises = teamPRs.map((pr, index) => {
+        // Skip if PR is missing essential properties
+        if (!pr || !pr.repo || !pr.number) {
+          // Return a placeholder to keep array indices aligned
+          return Promise.resolve({
+            repo: pr?.repo || 'unknown',
+            number: pr?.number || 0,
+            user: { login: 'unknown' },
+            reviews: [],
+            reviewers: [],
+            mergeable: null,
+            mergeable_state: 'unknown',
+            title: 'Incomplete PR data',
+            html_url: '#',
+            head: { ref: 'unknown-branch' },
+            created_at: new Date().toISOString()
+          });
+        }
+
         const reviewsPromise = octokit.pulls.listReviews({
           owner: organization,
           repo: pr.repo,
           pull_number: pr.number
+        }).catch(err => {
+          return { data: [] }; // Return empty array on error
         });
         
         // Only fetch details when needed for mergeable status
@@ -671,6 +683,8 @@ function App() {
           owner: organization,
           repo: pr.repo,
           pull_number: pr.number
+        }).catch(err => {
+          return { data: { mergeable: null, mergeable_state: 'unknown' } }; // Return placeholder on error
         });
         
         return Promise.all([reviewsPromise, detailsPromise])
@@ -681,7 +695,12 @@ function App() {
               stage: `Loaded details for PR #${pr.number} (${index + 1}/${teamPRs.length})`
             }));
             
-            const hasRequestedReviewers = pr.requested_reviewers && pr.requested_reviewers.length > 0;
+            // Ensure we have valid requested_reviewers
+            if (!pr.requested_reviewers) {
+              pr.requested_reviewers = [];
+            }
+            
+            const hasRequestedReviewers = pr.requested_reviewers.length > 0;
             const approvalCount = reviewsResponse.data.filter(r => r.state === 'APPROVED').length;
             
             let mergeBlockReason = null;
@@ -691,11 +710,11 @@ function App() {
             
             return {
               ...pr,
-              reviews: reviewsResponse.data,
-              teamMember: teamMembers.find(member => member === pr.user.login),
+              reviews: reviewsResponse.data || [],
+              teamMember: pr.user ? teamMembers.find(member => member === pr.user.login) : null,
               reviewers: pr.requested_reviewers || [],
               mergeable: prDetailResponse.data.mergeable,
-              mergeable_state: prDetailResponse.data.mergeable_state,
+              mergeable_state: prDetailResponse.data.mergeable_state || 'unknown',
               mergeBlockReason
             };
           });
@@ -745,11 +764,20 @@ function App() {
   
   // Get review status for a PR
   const getReviewStatus = (pr) => {
-    const reviewerLogins = pr.reviewers.map(r => r.login);
+    // Ensure PR has the expected properties
+    if (!pr) {
+      return { reviewed: [], pending: [], states: {}, hasReviews: false };
+    }
+    
+    // Make sure we have arrays to work with
+    if (!pr.reviewers) pr.reviewers = [];
+    if (!pr.reviews) pr.reviews = [];
+    
+    const reviewerLogins = pr.reviewers.map(r => r && r.login ? r.login : 'unknown');
     const completedReviews = {};
     
     pr.reviews.forEach(review => {
-      if (review.state !== 'COMMENTED') {
+      if (review && review.user && review.state && review.state !== 'COMMENTED') {
         completedReviews[review.user.login] = review.state;
       }
     });
@@ -764,9 +792,14 @@ function App() {
   
   // Get unresolved comments count
   const getUnresolvedCommentsCount = (pr) => {
+    // Validate input
+    if (!pr || !pr.reviews) {
+      return 0;
+    }
+    
     // Count CHANGES_REQUESTED reviews as these contain unresolved comments
     const changesRequestedCount = pr.reviews.filter(review => 
-      review.state === 'CHANGES_REQUESTED'
+      review && review.state === 'CHANGES_REQUESTED'
     ).length;
     
     return changesRequestedCount;
@@ -776,9 +809,13 @@ function App() {
   const getAllReviewers = () => {
     const reviewers = new Set();
     pullRequests.forEach(pr => {
-      pr.reviewers.forEach(reviewer => {
-        reviewers.add(reviewer.login);
-      });
+      if (pr && pr.reviewers) {
+        pr.reviewers.forEach(reviewer => {
+          if (reviewer && reviewer.login) {
+            reviewers.add(reviewer.login);
+          }
+        });
+      }
     });
     return Array.from(reviewers);
   };
@@ -787,21 +824,39 @@ function App() {
   const getAllRepos = () => {
     const repos = new Set();
     pullRequests.forEach(pr => {
-      repos.add(pr.repo);
+      if (pr && pr.repo) {
+        repos.add(pr.repo);
+      }
     });
     return Array.from(repos).sort();
   };
   
   // Filter PRs based on selected filters
   const filteredPRs = pullRequests.filter(pr => {
+    // Skip completely undefined PRs
+    if (!pr) {
+      return false;
+    }
+    
+    // Repair missing properties instead of filtering out
+    if (!pr.user) {
+      pr.user = { login: 'unknown' }; 
+    }
+    
+    if (!pr.reviewers) {
+      pr.reviewers = [];
+    }
+    
     // Filter by author
     if (authorFilter !== 'all' && pr.user.login !== authorFilter) {
       return false;
     }
     
-    // Filter by reviewer
+    // Filter by reviewer (safely)
     if (reviewerFilter !== 'all') {
-      const hasReviewer = pr.reviewers.some(reviewer => reviewer.login === reviewerFilter);
+      const hasReviewer = pr.reviewers && pr.reviewers.some(reviewer => 
+        reviewer && reviewer.login === reviewerFilter
+      );
       if (!hasReviewer) return false;
     }
     
@@ -1182,6 +1237,20 @@ function App() {
 
   // Render a PR row with improved security - Now using modal
   const renderPRRow = (pr) => {
+    // Repair PR data instead of skipping
+    if (!pr) {
+      return null; // We can't render null PRs
+    }
+
+    // Fill in missing properties
+    if (!pr.user) pr.user = { login: 'unknown' };
+    if (!pr.reviews) pr.reviews = [];
+    if (!pr.reviewers) pr.reviewers = [];
+    if (!pr.head) pr.head = { ref: 'unknown-branch' };
+    if (!pr.repo) pr.repo = 'unknown-repo';
+    if (!pr.number) pr.number = '0';
+    if (!pr.title) pr.title = 'Untitled PR';
+
     const reviewStatus = getReviewStatus(pr);
     const slackLink = getSlackLink(pr);
     const prWithSameBranchAndLink = !slackLink && findPRsWithSameBranch(pr);
@@ -1195,7 +1264,7 @@ function App() {
         <td className="pr-title-cell">
           <span className="pr-repo-badge">{sanitizeText(pr.repo)}</span>
           <span className="pr-number">#{pr.number}</span>
-          <a href={pr.html_url} 
+          <a href={pr.html_url || '#'} 
              target="_blank" 
              rel="noopener noreferrer" 
              className="pr-title-link"
