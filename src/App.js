@@ -48,7 +48,7 @@ function generateRandomState() {
 }
 
 // Regex to extract Slack links from PR descriptions - with stricter validation
-const SLACK_LINK_REGEX = /^(https:\/\/[a-zA-Z0-9-]+\.slack\.com\/[a-zA-Z0-9\/#@_\-=&.:]+)$/;
+const SLACK_LINK_REGEX = /(https:\/\/[a-zA-Z0-9-]+\.slack\.com\/[a-zA-Z0-9\/#@_\-=&.:]+)/;
 
 // Sanitize text to prevent XSS attacks
 function sanitizeText(text) {
@@ -457,14 +457,19 @@ function App() {
   // Extract the first Slack link from PR description with proper validation
   const extractSlackLink = (description) => {
     if (!description) return null;
+    
+    // Find all matches in the description
     const matches = description.match(SLACK_LINK_REGEX);
     
-    if (matches && matches[1]) {
+    if (matches && matches.length > 0) {
+      // Get the first match
+      const firstMatch = matches[0];
+      
       // Additional validation for Slack URL
       try {
-        const url = new URL(matches[1]);
+        const url = new URL(firstMatch);
         if (url.hostname.endsWith('.slack.com')) {
-          return matches[1];
+          return firstMatch;
         }
       } catch (e) {
         // Invalid URL
