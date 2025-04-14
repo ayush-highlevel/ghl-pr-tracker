@@ -824,6 +824,18 @@
   border-bottom: none;
 }
 
+.pr-serial-number {
+  width: 10px;
+  min-width: 10px;
+  text-align: center;
+}
+
+.pr-serial-number-cell {
+  text-align: center;
+  font-weight: 500;
+  color: #666;
+}
+
 .pr-title-cell {
   min-width: 250px;
   max-width: 350px;
@@ -1544,14 +1556,15 @@ th:last-child {
 }
 
 /* Add column width constraints to prevent shifts */
-.pr-table th:nth-child(1) { width: 23%; }  /* Title */
-.pr-table th:nth-child(2) { width: 9%; }  /* Author */
-.pr-table th:nth-child(3) { width: 9%; }  /* Created */
-.pr-table th:nth-child(4) { width: 25%; }  /* Review Status */
-.pr-table th:nth-child(5) { width: 7%; }   /* Unresolved Comments */
-.pr-table th:nth-child(6) { width: 10%; }  /* Mergeable */
-.pr-table th:nth-child(7) { width: 10%; }  /* Slack Thread */
-.pr-table th:nth-child(8) { width: 7%; }   /* Actions */
+.pr-table th:nth-child(1) { width: 3%; min-width: 30px; }   /* Serial Number */
+.pr-table th:nth-child(2) { width: 23%; }  /* Title */
+.pr-table th:nth-child(3) { width: 8%; }   /* Author */
+.pr-table th:nth-child(4) { width: 8%; }   /* Created */
+.pr-table th:nth-child(5) { width: 25%; }  /* Review Status */
+.pr-table th:nth-child(6) { width: 6%; }   /* Unresolved Comments */
+.pr-table th:nth-child(7) { width: 9%; }   /* Mergeable */
+.pr-table th:nth-child(8) { width: 9%; }   /* Slack Thread */
+.pr-table th:nth-child(9) { width: 6%; }   /* Actions */
 
 /* Prevent form submit scroll behavior */
 form {

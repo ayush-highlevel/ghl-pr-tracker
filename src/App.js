@@ -1137,6 +1137,7 @@ function App() {
             <table className="pr-table">
               <thead>
                 <tr>
+                  <th className="pr-serial-number">#</th>
                   <th>Title</th>
                   <th>Author</th>
                   <th>Created</th>
@@ -1148,7 +1149,7 @@ function App() {
                 </tr>
               </thead>
               <tbody>
-                {filteredPRs.map(renderPRRow)}
+                {filteredPRs.map((pr, index) => renderPRRow(pr, index))}
               </tbody>
             </table>
           </div>
@@ -1241,7 +1242,7 @@ function App() {
   });
 
   // Render a PR row with improved security - Now using modal
-  const renderPRRow = (pr) => {
+  const renderPRRow = (pr, index) => {
     // Repair PR data instead of skipping
     if (!pr) {
       return null; // We can't render null PRs
@@ -1266,6 +1267,7 @@ function App() {
     
     return (
       <tr key={`${pr.repo}-${pr.number}`} className={isUpdating ? 'pr-row-updating' : ''}>
+        <td className="pr-serial-number-cell">{index + 1}</td>
         <td className="pr-title-cell">
           <span className="pr-repo-badge">{sanitizeText(pr.repo)}</span>
           <span className="pr-number">#{pr.number}</span>
